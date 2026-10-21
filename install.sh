@@ -54,20 +54,30 @@ say "✅ 插件已复制到 $PLUGIN_DIR"
 # ── 2. 语法自检 ──
 NODE_BIN="${NODE:-$(command -v node || true)}"
 [ -n "$NODE_BIN" ] || fail "找不到 node，请先安装 Node.js >= 22"
+"$NODE_BIN" -e 'process.exit(0)' || fail "node 无法执行: $NODE_BIN"
 for f in index.mjs impl.mjs weixin-send.mjs; do
   "$NODE_BIN" --check "$PLUGIN_DIR/$f" || fail "语法检查失败: $f"
 done
+# 问候脚本也过一遍语法：它是 cron 直接跑的，写错了只会在 7:00 静默失败
+bash -n "$SELF_DIR/greetings/morning.sh" || fail "语法检查失败: greetings/morning.sh"
+"$NODE_BIN" --check "$SELF_DIR/greetings/push.mjs" || fail "语法检查失败: greetings/push.mjs"
 say "✅ 语法检查通过"
 
 # ── 3. 内容指纹 → 版本号 ──
+# 语义版本基线从 package.json 读，避免「代码升级了但挂载行还写 1.0.0」
+BASE_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' "$SELF_DIR/package.json" | head -1)
+[ -n "$BASE_VERSION" ] || BASE_VERSION="1.0.0"
 HASH=$(cat "$PLUGIN_DIR"/*.mjs | sha256sum | cut -c1-8)
-VERSION="1.0.0+$HASH"
+VERSION="$BASE_VERSION+$HASH"
 say "✅ 内容指纹: $HASH → version: $VERSION"
 
 # ── 4. 挂载 ──
 touch "$PATCH_FILE"
 if grep -q "plugins/whale-commands/index.mjs" "$PATCH_FILE" 2>/dev/null; then
-  say "✅ 挂载行已存在，跳过"
+  # 已挂载过：不能简单跳过 —— 重装新版本时必须让 version 变化，否则 Cordis 不重挂，
+  # 表现为「文件换了但命令行为没变」（第 11 节事故的同一类问题）。
+  say "ℹ️  挂载行已存在，改为同步版本号（触发重挂）"
+  DSH_HOME="$DSH_HOME" bash "$PLUGIN_DIR/sync-version.sh" || say "⚠️  版本同步失败，请手动跑 $PLUGIN_DIR/sync-version.sh"
 else
   cp "$PATCH_FILE" "$STATE_DIR/cordis.patch.yml.bak"
   cat >> "$PATCH_FILE" <<EOF
@@ -95,8 +105,12 @@ chmod +x "$GREET_DIR/morning.sh"
 say "✅ 问候脚本已安装到 $GREET_DIR"
 
 # ── 6. 可选 crontab ──
-CRON_LINE="0 7 * * * /bin/bash $GREET_DIR/morning.sh"
+# cron 里 % 是换行符、空格是字段分隔符，路径必须整体加引号，否则会写出坏条目
+CRON_LINE="0 7 * * * /bin/bash \"$GREET_DIR/morning.sh\""
 if [ "$WITH_CRON" = "1" ]; then
+  case "$GREET_DIR" in
+    *[[:space:]]*|*%*) fail "安装路径含空格或 %（$GREET_DIR），cron 无法安全使用；请把 DSH_HOME 换到无空格路径" ;;
+  esac
   if ! command -v crontab >/dev/null 2>&1; then
     say "⚠️  找不到 crontab，跳过定时任务"
   elif crontab -l 2>/dev/null | grep -Fq "$GREET_DIR/morning.sh"; then

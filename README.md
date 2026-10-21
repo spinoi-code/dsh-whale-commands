@@ -19,7 +19,7 @@
 - [命令一览](#命令一览)
 - [技术要点](#技术要点)
 - [安装](#安装)
-- [使用](#使用)：[人设](#人设) · [用量与余额](#用量与余额) · [历史对话](#历史对话) · [定时问候](#定时问候)
+- [使用](#使用)：[人设](#人设) · [用量与余额](#用量与余额) · [历史对话](#历史对话) · [定时问候](#定时问候) · [隐藏别人的命令](#从菜单里隐藏别的插件的命令)
 - [改代码后必须做的一步](#改代码后必须做的一步)
 - [卸载](#卸载) · [故障排查](#故障排查) · [环境变量](#环境变量)
 - [架构与踩坑记录](docs/ARCHITECTURE.md)
@@ -179,6 +179,22 @@ DRY_RUN=1 bash ~/.dsh/.whale-commands/greetings/morning.sh
 DRY_RUN=1 FORCE_DOW=3 FORCE_STYLE=whale bash ~/.dsh/.whale-commands/greetings/morning.sh
 ```
 
+### 从菜单里隐藏别的插件的命令
+
+同一宿主上如果还有**其它插件**注册了斜杠命令，`/help` 会把它们归进「扩展命令」组。
+不想让它们出现在菜单里（比如那是你自己的私人命令），就在
+`~/.dsh/.whale-commands/hidden.commands` 里一行写一个命令名：
+
+```
+# 注释行
+private-a
+private-b
+```
+
+- **只影响菜单展示，命令本身照常可用**
+- 文件不存在＝不过滤；读不到也当空集，不影响启动
+- 这份名单只在本机状态目录里，不属于仓库；插件代码里不含任何具体命令名
+
 ---
 
 ## 改代码后必须做的一步
@@ -239,7 +255,8 @@ sync-version.sh --bump minor    # 先手升基线，再同步指纹
 | 日志里 `ok=0` 或 `register FAILED` | 命令名冲突。重挂一次即可（自愈重试通常已处理） |
 | 命令生效但人设没变 | 人设注入下一步，发下一条消息才吃到 |
 | `/token` 余额查询失败 | 检查 `~/.dsh/.credentials.yaml` 里的 `DEEPSEEK_API_KEY` |
-| 定时问候没收到 | `tail ~/.dsh/.whale-commands/greetings.log`；无记录说明 cron 没跑 |
+| 定时问候没收到 | 先 `DRY_RUN=1 bash ~/.dsh/.whale-commands/greetings/morning.sh` 看文风对不对；再看 `greetings.log`。若日志里有 `NODE: unbound variable`，是 1.1.0 及更早的 bug，升级到 1.1.1 |
+| Web GUI 里发这几个命令回「只在微信通道可用」 | 预期行为，避免跨通道读微信会话 |
 
 **这个插件出错不会让服务起不来** —— 入口已加固，失败只会降级成「没有命令」。
 
@@ -252,8 +269,8 @@ sync-version.sh --bump minor    # 先手升基线，再同步指纹
 | `DSH_HOME` | `~/.dsh` | Harness 主目录 |
 | `DSH_WHALE_SESSION_PREFIX` | `weixin-` | 只对这些前缀的会话生效 |
 | `DSH_WHALE_ZSTD` | `/usr/bin/zstd` | zstd 可执行文件 |
-| `DSH_BALANCE_URL` | `https://api.deepseek.com/user/balance` | 余额接口 |
-| `DSH_WEIXIN_CRED_FILE` | `$DSH_HOME/.credentials.yaml` | 凭据文件 |
+| `DSH_BALANCE_URL` | `https://api.deepseek.com/user/balance` | 余额接口。⚠️ 改成别的域名＝把 `DEEPSEEK_API_KEY` 发给那个域名 |
+| `DSH_WEIXIN_CRED_FILE` | `$DSH_HOME/.credentials.yaml` | 凭据文件（旧名 `WEIXIN_CRED_FILE` 仍兼容） |
 | `DSH_WEIXIN_CRED_KEY` | `WEIXIN_ILINK_CREDENTIAL` | 凭据键名 |
 | `DSH_WEIXIN_TO_USER` | 凭据内 `userId` | 覆盖推送收件人 |
 
@@ -263,7 +280,11 @@ sync-version.sh --bump minor    # 先手升基线，再同步指纹
 
 - 在 **DeepSeek Harness `0.1.0-rc.7`** + **deepseek-harness-weixin `0.2.5`** 上验证通过
 - 依赖 Harness 的 internal API（`ctx.commands.register`、`agent.inject`、`agent/created`），跨大版本可能需要适配
-- 只对微信通道生效；Web GUI 会话不受影响（前缀过滤）
+- **命令是全局注册的**（普通 ctx 注册即全局），所以 Web GUI 里也能看到这些命令入口；
+  但 `/whale`、`/normal`、`/sessions`、`/load`、`/style`、`/token` 这 6 条读的是**微信会话数据**，
+  在非微信会话（如 Web GUI）会直接返回「只在微信通道可用」，避免跨通道读取。
+  `/time`、`/help` 无毒，任何通道都能用
+- 人设自动继承（`agent/created`）用 `weixin-` 前缀过滤，只对微信会话生效
 
 ## 安全说明
 
@@ -271,6 +292,34 @@ sync-version.sh --bump minor    # 先手升基线，再同步指纹
 - 从不打印或返回 token
 - 只读取会话日志，不修改
 - 除「注入人设」「主动推送」「查余额」外无其它网络请求
+
+## 变更记录
+
+### 1.1.1
+
+- **修复**：`greetings/morning.sh` 里 `$NODE` 在参数化时漏改成 `$NODE_BIN`，`set -u` 下
+  每天 7:00 必然 `unbound variable` 退出、问候一条都发不出去（只在日志里留一行报错）
+- **修复**：`/token` 的「今日累计」旧实现按会话文件 mtime 挑文件、再把**整份历史**加总，
+  跨天的老会话会把昨天的量算进今天。改为按事件 `time >= 今日零点` 过滤
+- **修复**：`/token` 今日扫描只认 `session.jsonl.zstd`，纯 `session.jsonl` 的会话被静默漏掉
+- **修复**：`weixin-send.mjs` 注释写「不抛异常」，但 `loadCredential()` 在 `try` 之外，
+  凭据缺失会抛给调用方。已挪进 `try`
+- **修复**：`install.sh` 版本基线写死 `1.0.0`、且挂载行已存在就整段跳过 ——
+  重装新版本时 `version` 不变会导致 Cordis 不重挂（第 11 节事故的同一类问题）。
+  现在基线从 `package.json` 读，已挂载时改跑 `sync-version.sh`
+- **改进**：README 里 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_USER`
+  三个变量此前只在文档里存在，现已真正实现
+- **改进**：注入消息带上语义 `form`（人设 `instructions`、历史载入 `recall`），宿主会折叠展示
+- **改进**：`install.sh` 增加 `bash -n` 自检、node 可执行性检查、cron 行引号与路径校验
+- **新增**：`hidden.commands` 菜单隐藏名单（机制通用、不含任何具体命令名），
+  可让同一宿主上其它插件的命令不出现在 `/help` 里
+- **改进**：`.gitignore` 覆盖 `.credentials.yaml` / `.env` / `*.pem` / `*.key` / `sessions/`
+- **修复**：`scripts/sync-version.sh` 提示里残留的开发机日志路径
+
+### 1.1.0
+
+- `/help` 改为两级菜单：`/help` 出分组目录，`/help <group>` 进子菜单（支持首字母简写），`/help all` 一次列全
+
 
 ## License
 

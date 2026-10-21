@@ -10,9 +10,11 @@ import { sendText } from "./weixin-send.mjs";
 const text = process.argv[2];
 if (typeof text !== "string" || text.trim() === "") {
   console.error('用法: node push.mjs "要发送的文字"');
-  process.exit(2);
+  process.exitCode = 2;
+} else {
+  const result = await sendText(text);
+  console.log(JSON.stringify(result));
+  // 用 exitCode 而不是 process.exit：stdout 是管道时（morning.sh 用命令替换读它）
+  // process.exit 可能截断输出
+  process.exitCode = result.ok ? 0 : 1;
 }
-
-const result = await sendText(text);
-console.log(JSON.stringify(result));
-process.exit(result.ok ? 0 : 1);

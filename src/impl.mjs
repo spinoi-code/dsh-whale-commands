@@ -52,6 +52,12 @@ const SESSIONS_ROOT = join(DSH_HOME, "sessions");
 const CREDENTIAL_FILE = join(DSH_HOME, ".credentials.yaml");
 /** 诊断日志。 */
 const LOG_FILE = join(STATE_DIR, "plugin.log");
+/**
+ * 菜单隐藏名单：一行一个命令名（`#` 开头为注释，文件不存在则不过滤）。
+ * 用途：同一宿主上其它插件的命令不想出现在 /help 里时，把它们写进这个文件即可 ——
+ * 机制本身不认识任何具体命令名，所以这里不含任何私有信息。
+ */
+const HIDDEN_FILE = join(STATE_DIR, "hidden.commands");
 /** zstd 可执行文件；会话日志是多帧 zstd，Node 内置解压只解第一帧。 */
 const ZSTD_BIN = process.env.DSH_WHALE_ZSTD?.trim() || "/usr/bin/zstd";
 /** 账户余额查询接口。 */
@@ -110,11 +116,29 @@ function setOn(value) {
   writeFileSync(STATE_FILE, value ? "on\n" : "off\n", "utf8");
 }
 
-function contextMessage(text) {
+/**
+ * 构造一条插件注入的 user 消息。
+ * form 告诉宿主「这是什么性质的内容」：人设是 instructions、历史载入是 recall，
+ * 宿主据此折叠展示，不会把注入原文整段铺在对话里。省略 form 也合法（当不透明内容）。
+ */
+function contextMessage(text, form) {
   return createUserMessage({
     content: [{ type: "text", text }],
-    source: { kind: "plugin", plugin: "whale-persona-command" },
+    source: { kind: "plugin", plugin: "whale-commands", ...(form ? { form } : {}) },
   });
+}
+
+/**
+ * 这些命令读的是**微信会话**的数据（会话列表、历史正文、用量、人设、问候风格）。
+ * 命令本身注册在全局命令表上（普通 ctx 注册即全局），所以 Web GUI 也能看到入口；
+ * 在这里显式拦住，避免把微信会话内容交叉搬进别的通道。
+ */
+const WEIXIN_ONLY = {
+  kind: "error",
+  text: "该命令只在微信通道可用（Web GUI 会话不受理，避免跨通道读微信会话）。",
+};
+function denyUnlessWeixin(agent) {
+  return isWeixinAgent(agent) ? undefined : WEIXIN_ONLY;
 }
 
 function isWeixinAgent(agent) {
@@ -201,6 +225,23 @@ function messageText(event) {
   return text.replace(/^\[Private Weixin message[^\]]*\]\s*/u, "");
 }
 
+/**
+ * 会话的最后修改时间。
+ * 优先 zstd 文件的 mtime（目录 mtime 不随内容写入更新），没有 zstd 就用纯 jsonl，
+ * 两者都没有再退回目录 mtime —— 否则纯 jsonl 的会话会被静默漏掉。
+ */
+function sessionMtime(dir) {
+  try {
+    const zst = join(dir, "session.jsonl.zstd");
+    if (existsSync(zst)) return statSync(zst).mtimeMs;
+    const plain = join(dir, "session.jsonl");
+    if (existsSync(plain)) return statSync(plain).mtimeMs;
+    return statSync(dir).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 /** 汇总一个会话的元信息。 */
 function summarizeSession(dir, id) {
   const events = readSessionEvents(dir);
@@ -225,21 +266,12 @@ function summarizeSession(dir, id) {
     }
   }
 
-  let mtime = 0;
-  try {
-    // 用会话文件的修改时间，比目录 mtime 准确（目录 mtime 不随内容写入更新）
-    const zst = join(dir, "session.jsonl.zstd");
-    mtime = existsSync(zst) ? statSync(zst).mtimeMs : statSync(dir).mtimeMs;
-  } catch {
-    /* 忽略 */
-  }
-
   return {
     id,
     dir,
     title: title || firstUserText || "(无标题)",
     turns: userCount,
-    mtime,
+    mtime: sessionMtime(dir),
     messages,
   };
 }
@@ -274,6 +306,21 @@ function listWeixinSessions() {
   }
   found.sort((a, b) => b.mtime - a.mtime);
   return found;
+}
+
+/** 读菜单隐藏名单。读不到就当空集。 */
+function hiddenCommands() {
+  try {
+    const text = readFileSync(HIDDEN_FILE, "utf8");
+    return new Set(
+      text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith("#")),
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 /** 千分位格式化。 */
@@ -344,9 +391,11 @@ export function apply(ctx, _config) {
     name: "whale",
     description: "开启鲸鱼娘（大肥鱼）人设",
     handler: ({ agent }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       setOn(true);
       try {
-        agent.inject(contextMessage(PERSONA));
+        agent.inject(contextMessage(PERSONA, "instructions"));
       } catch (error) {
         return { kind: "error", text: `人设注入失败：${String(error?.message ?? error)}` };
       }
@@ -358,9 +407,11 @@ export function apply(ctx, _config) {
     name: "normal",
     description: "退出鲸鱼娘人设，恢复正常口吻",
     handler: ({ agent }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       setOn(false);
       try {
-        agent.inject(contextMessage(EXIT_NOTE));
+        agent.inject(contextMessage(EXIT_NOTE, "instructions"));
       } catch (error) {
         return { kind: "error", text: `切换失败：${String(error?.message ?? error)}` };
       }
@@ -388,6 +439,8 @@ export function apply(ctx, _config) {
     name: "sessions",
     description: "列出最近 5 个微信对话",
     handler: ({ agent }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       let sessions;
       try {
         sessions = listWeixinSessions();
@@ -415,6 +468,8 @@ export function apply(ctx, _config) {
     name: "load",
     description: "把指定编号的历史对话上下文载入当前会话",
     handler: ({ agent, rawInput }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       const index = Number.parseInt(String(rawInput ?? "").trim(), 10);
       if (!Number.isInteger(index) || index < 1) {
         return { kind: "error", text: "用法：/load <编号>，编号用 /sessions 查看。" };
@@ -460,7 +515,7 @@ export function apply(ctx, _config) {
       ].join("\n");
 
       try {
-        agent.inject(contextMessage(text));
+        agent.inject(contextMessage(text, "recall"));
       } catch (error) {
         return { kind: "error", text: `载入失败：${String(error?.message ?? error)}` };
       }
@@ -474,7 +529,9 @@ export function apply(ctx, _config) {
   register({
     name: "style",
     description: "设置早上问候的风格（random / whale / imperial）",
-    handler: ({ rawInput }) => {
+    handler: ({ agent, rawInput }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       const MODES = ["random", "whale", "imperial"];
       const LABEL = { random: "50/50 随机", whale: "鲸鱼娘风", imperial: "朝堂风" };
       const readMode = () => {
@@ -517,6 +574,8 @@ export function apply(ctx, _config) {
     name: "token",
     description: "查看 token 用量、今日累计与账户余额",
     handler: async ({ agent }) => {
+      const denied = denyUnlessWeixin(agent);
+      if (denied) return denied;
       const lines = [];
 
       // 用量累加：只用 assistant/message 的 usage，避免 assistant/chunk 重复计数
@@ -558,6 +617,8 @@ export function apply(ctx, _config) {
       }
 
       // ── 2) 今日累计（所有微信会话）──
+      // 口径：只统计 time >= 今日零点 的事件。旧实现用「会话文件 mtime 在今天」
+      // 挑文件、再把整份历史加总，跨天的老会话会把昨天的量算进今天。
       try {
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
@@ -570,16 +631,25 @@ export function apply(ctx, _config) {
             if (!entry.isDirectory() || !entry.name.startsWith(SESSION_PREFIX)) continue;
             const dir = join(base, entry.name);
             try {
-              const mtime = statSync(join(dir, "session.jsonl.zstd")).mtimeMs;
-              if (mtime >= since) dirs.push(dir);
+              if (sessionMtime(dir) >= since) dirs.push(dir);
             } catch {
               /* 跳过读不到时间的 */
             }
           }
         }
         let today = { input: 0, output: 0, cacheRead: 0, reasoning: 0, requests: 0, turns: 0 };
+        let counted = 0;
+        // 事件都带 time；万一某条没有（老格式 / 异常行），因为会话文件 mtime 已在今天，仍计入
+        const isToday = (event) => {
+          const t = Number(event?.time ?? 0);
+          return t === 0 ? true : t >= since;
+        };
         for (const dir of dirs) {
-          const a = sumUsage(readSessionEvents(dir));
+          const events = readSessionEvents(dir);
+          const fresh = events.filter(isToday);
+          if (fresh.length === 0) continue;
+          counted += 1;
+          const a = sumUsage(fresh);
           today.input += a.input;
           today.output += a.output;
           today.cacheRead += a.cacheRead;
@@ -588,8 +658,8 @@ export function apply(ctx, _config) {
           today.turns += a.turns;
         }
         const totalInput = today.input + today.cacheRead;
-        lines.push("", `【今日累计】${dirs.length} 个会话`);
-        if (dirs.length === 0) {
+        lines.push("", `【今日累计】${counted} 个会话`);
+        if (counted === 0) {
           lines.push("  今天还没有记录");
         } else {
           lines.push(`  输入 ${fmtNumber(totalInput)}（缓存 ${fmtNumber(today.cacheRead)} / 新增 ${fmtNumber(today.input)}）`);
@@ -636,11 +706,14 @@ export function apply(ctx, _config) {
       } catch {
         list = [];
       }
+      // 隐藏名单只影响菜单展示，不影响命令本身能不能用
+      const hidden = hiddenCommands();
+      if (hidden.size > 0) list = list.filter((c) => !hidden.has(c.name));
       const names = list.map((c) => c.name);
       const desc = new Map(list.map((c) => [c.name, c.description]));
 
       const CHAT = ["new", "reset", "sessions", "load", "time", "token", "style", "help"];
-      // 宿主自帶的命令（不是本插件註冊的），單獨一組，免得混進「扩展命令」
+      // 宿主自带的命令（不是本插件注册的），单独一组，免得混进「扩展命令」
       const HARNESS = ["compact", "export", "feedback", "goal", "permission", "plan", "weixin-login", "weixin-logout"];
       const groups = [
         {
@@ -702,7 +775,7 @@ export function apply(ctx, _config) {
         },
       ].filter((g) => g.items.length > 0);
 
-      // 一條命令可以帶多行說明（description 內含 \n），第二行起縮排顯示
+      // 一条命令可以带多行说明（description 内含 \n），第二行起缩进显示
       const pushItem = (arr, item) => {
         const [head, ...more] = String(item.desc ?? "").split("\n");
         arr.push(`/${item.name}${head ? ` — ${head}` : ""}`);
@@ -784,7 +857,7 @@ export function apply(ctx, _config) {
   ctx.on("agent/created", ({ agent }) => {
     if (!isOn() || !isWeixinAgent(agent)) return;
     try {
-      agent.inject(contextMessage(PERSONA));
+      agent.inject(contextMessage(PERSONA, "instructions"));
     } catch (error) {
       try {
         appendFileSync(

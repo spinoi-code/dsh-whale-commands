@@ -126,7 +126,7 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
-result=$("$NODE" "$PUSH" "$MSG" 2>>"$LOG")
+result=$("$NODE_BIN" "$PUSH" "$MSG" 2>>"$LOG")
 code=$?
 
 if [ $code -eq 0 ]; then

@@ -132,7 +132,7 @@ if [ "$after" = "$want" ]; then
   ok "版本已同步：$cur → $want"
   info "    内容指纹: $hash"
   info "    Cordis 会自动重挂；确认注册结果："
-  info "      grep 'apply done' $DSH_HOME/.playground/whale-plugin.log | tail -1"
+  info "      grep 'apply done' $DSH_HOME/.whale-commands/plugin.log | tail -1"
   info "    （应为 ok=8）"
 else
   bad "写入失败，回读到 $after"

@@ -240,6 +240,7 @@ dsh-whale-commands/            仓库
 ├── .whale-commands/
 │   ├── persona.state          人设开关 on/off
 │   ├── style.state            问候风格 random/whale/imperial
+│   ├── hidden.commands        /help 菜单隐藏名单（可选，一行一个命令名）
 │   ├── plugin.log             注册诊断（看 apply done: ok=8）
 │   └── greetings/             morning.sh + push.mjs + weixin-send.mjs
 ├── .credentials.yaml          Harness 凭据（不归本插件管）
@@ -251,3 +252,55 @@ dsh-whale-commands/            仓库
         ├── weixin-send.mjs
         └── sync-version.sh
 ```
+
+---
+
+## 十四、v1.1.1 修复记录：一次「脱敏式重构」引发的回归
+
+这个项目同时存在于本机（路径写死、只服务一台机器）和开源仓（全部走 `DSH_HOME` /
+环境变量）两个版本。把本机版「参数化」成开源版的过程本身引入了几个 bug，
+值得单独记一笔，因为**它们的共同特征是：改完不报错，只是不干活**。
+
+### 1. `$NODE` 漏改（最严重）
+
+本机版是 `NODE=/绝对路径/node`，开源版改成 `resolve_node()` + `NODE_BIN=$(resolve_node)`，
+但调用点还写着 `"$NODE"`。脚本开头有 `set -u`，于是每天 7:00：
+
+```
+morning.sh: line 129: NODE: unbound variable   → exit 1
+```
+
+`push.mjs` 根本没被调用，微信端一条收不到，日志里只留一行看不懂的报错。
+**教训**：把硬编码改成「探测 + 变量」时，要 grep 一遍旧变量名的所有引用；
+`DRY_RUN` 路径也覆盖不到发送那一行（它在 `DRY_RUN` 分支之后），必须用桩 push 跑通全链路。
+
+### 2. 文档里的环境变量根本不存在
+
+README 写了 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_USER`，
+代码读的却是无前缀的 `WEIXIN_CRED_FILE`、键名硬编码、收件人固定取 `userId`。
+用户照文档配置＝静默无效。**修法**：把三个变量真正实现（而不是删文档）。
+
+### 3. 「只对微信通道生效」不成立
+
+`apply(ctx)` 拿到的是插件 ctx，`ctx.commands.register()` 因此是**全局注册**
+（dsh-commands 的语义：plain-context 即全局），Web GUI 也能发这些命令。
+只有 `agent/created` 的人设继承做了 `weixin-` 前缀过滤。
+**修法**：读微信会话数据的 6 条命令加通道闸，非微信会话直接返回错误；
+`/time`、`/help` 不受影响。
+
+### 4. 版本号漂移
+
+`install.sh` 把基线写死 `1.0.0`，且挂载行已存在就整段跳过 —— 重装新版本时
+`version` 不变，Cordis 不重挂，表现为「文件换了但行为没变」（第 11 节事故的同一类问题）。
+**修法**：基线从 `package.json` 读；已挂载时改跑 `sync-version.sh`。
+
+### 5. 顺带修掉的两个真 bug
+
+- `/token` 的「今日累计」按会话文件 mtime 挑文件、再把**整份历史**加总 → 跨天会话会
+  把昨天的量算进今天。改为按事件 `time >= 今日零点` 过滤（事件都带 `time`）。
+- 今日扫描只 stat `session.jsonl.zstd`，纯 `session.jsonl` 的会话被静默漏掉。
+  抽了 `sessionMtime()` 统一处理。
+
+**通用教训**：凡是「把写死的东西变成变量/探测」的重构，都要配一个能跑通**完整链路**的
+自检（桩替换掉真正发消息的那一步），否则最容易坏的恰恰是最后那一步。
+

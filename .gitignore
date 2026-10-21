@@ -4,6 +4,19 @@
 *.bak
 *.bak.*
 
+# ── 绝不能进仓库的东西 ──
+# 凭据：iLink token / DeepSeek API key 都在这里，进仓库等于公开
+.credentials.yaml
+credentials.yaml
+.env
+.env.*
+*.pem
+*.key
+
+# 本地状态与会话正文（可能含私人对话）
+.whale-commands/
+sessions/
+
 node_modules/
 .DS_Store
 Thumbs.db

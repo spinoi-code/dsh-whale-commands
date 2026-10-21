@@ -12,8 +12,15 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 const DSH_HOME = process.env.DSH_HOME?.trim() || join(homedir(), ".dsh");
-const CRED_FILE = process.env.WEIXIN_CRED_FILE || join(DSH_HOME, ".credentials.yaml");
-const CRED_KEY = "WEIXIN_ILINK_CREDENTIAL";
+/** 凭据文件：DSH_WEIXIN_CRED_FILE（新）> WEIXIN_CRED_FILE（旧，兼容）> $DSH_HOME/.credentials.yaml */
+const CRED_FILE =
+  process.env.DSH_WEIXIN_CRED_FILE?.trim() ||
+  process.env.WEIXIN_CRED_FILE?.trim() ||
+  join(DSH_HOME, ".credentials.yaml");
+/** 凭据键名，可覆盖（与自己改过 key 名的部署兼容）。 */
+const CRED_KEY = process.env.DSH_WEIXIN_CRED_KEY?.trim() || "WEIXIN_ILINK_CREDENTIAL";
+/** 收件人覆盖；留空则用凭据里的 userId。 */
+const TO_USER = process.env.DSH_WEIXIN_TO_USER?.trim() || "";
 
 // ── 官方协议常量（与 deepseek-harness-weixin@0.2.5 一致） ──
 const CHANNEL_VERSION = "0.2.5";
@@ -62,24 +69,25 @@ function headers(token) {
 
 /** 主动推送一条文本。返回 { ok, httpStatus }，不抛异常。 */
 export async function sendText(text, credential) {
-  const cred = credential ?? loadCredential();
-  const url = new URL(
-    "ilink/bot/sendmessage",
-    cred.baseUrl.replace(/\/+$/, "") + "/",
-  ).toString();
-  const body = {
-    msg: {
-      from_user_id: "",
-      to_user_id: cred.userId,
-      client_id: `dsh-plugin:${Date.now()}-${randomBytes(4).toString("hex")}`,
-      message_type: MSG_TYPE_BOT,
-      message_state: MSG_STATE_FINISH,
-      item_list: [{ type: ITEM_TEXT, text_item: { text } }],
-    },
-    base_info: { channel_version: CHANNEL_VERSION, bot_agent: BOT_AGENT },
-  };
-
   try {
+    // 凭据读取必须在 try 内：文件缺失 / JSON 坏掉也是「推送失败」，不该抛给调用方
+    const cred = credential ?? loadCredential();
+    const url = new URL(
+      "ilink/bot/sendmessage",
+      cred.baseUrl.replace(/\/+$/, "") + "/",
+    ).toString();
+    const body = {
+      msg: {
+        from_user_id: "",
+        to_user_id: TO_USER || cred.userId,
+        client_id: `dsh-plugin:${Date.now()}-${randomBytes(4).toString("hex")}`,
+        message_type: MSG_TYPE_BOT,
+        message_state: MSG_STATE_FINISH,
+        item_list: [{ type: ITEM_TEXT, text_item: { text } }],
+      },
+      base_info: { channel_version: CHANNEL_VERSION, bot_agent: BOT_AGENT },
+    };
+
     const res = await fetch(url, {
       method: "POST",
       headers: headers(cred.token),
