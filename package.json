@@ -1,0 +1,44 @@
+{
+  "name": "dsh-whale-commands",
+  "version": "1.0.0",
+  "description": "Slash commands for the DeepSeek Harness Weixin channel: persona toggle, session history, token usage and balance, scheduled daily greetings. Executed host-side, so they cost no model tokens and hot-reload without restarting dsh web.",
+  "type": "module",
+  "license": "AGPL-3.0",
+  "author": "spinoi-code",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spinoi-code/dsh-whale-commands.git"
+  },
+  "bugs": {
+    "url": "https://github.com/spinoi-code/dsh-whale-commands/issues"
+  },
+  "homepage": "https://github.com/spinoi-code/dsh-whale-commands#readme",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "weixin",
+    "wechat",
+    "plugin",
+    "slash-commands",
+    "persona",
+    "whale"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "greetings",
+    "docs",
+    "install.sh",
+    "uninstall.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "install-plugin": "./install.sh",
+    "uninstall-plugin": "./uninstall.sh"
+  }
+}

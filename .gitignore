@@ -1,0 +1,9 @@
+# 运行时状态（安装后生成在 ~/.dsh/.whale-commands，不属于仓库）
+*.state
+*.log
+*.bak
+*.bak.*
+
+node_modules/
+.DS_Store
+Thumbs.db
