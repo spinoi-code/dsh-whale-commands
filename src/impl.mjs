@@ -628,41 +628,122 @@ export function apply(ctx, _config) {
 
   register({
     name: "help",
-    description: "列出全部可用命令",
-    handler: ({ agent }) => {
-      let registered;
+    description: "命令菜单：/help 目录 · /help <group> 子菜单 · /help all 全部",
+    handler: ({ agent, rawInput }) => {
+      let list = [];
       try {
-        registered = ctx.commands
-          .list(agent)
-          .map((command) => `/${command.name} — ${command.description}`);
-      } catch (error) {
-        registered = [`（读取命令列表失败：${String(error?.message ?? error)}）`];
+        list = ctx.commands.list(agent) ?? [];
+      } catch {
+        list = [];
       }
-      const lines = [
-        "DeepSeek Harness 微信机器人 · 全部命令",
-        "",
-        "【对话控制】",
-        "/whale — 开启鲸鱼娘人设",
-        "/normal — 退出鲸鱼娘人设",
-        "/new 或 /reset — 开始新会话（人设开关会继承）",
-        "/sessions — 列出最近 5 个微信对话",
-        "/load <编号> — 把该对话上下文载入当前会话",
-        "/time — 查看当前时间",
-        "/token — 查看 token 用量、今日累计与账户余额",
-        "/style <random|whale|imperial> — 设置早上问候风格",
-        "/help — 显示这份列表",
-        "",
-        "【通道检测】",
-        ...CHANNEL_COMMANDS.slice(0, 6),
-        "",
-        "【工具审批】",
-        ...CHANNEL_COMMANDS.slice(6),
-        "",
-        "【Harness 运行时注册的命令】",
-        ...registered,
-        "",
-        `鲸鱼娘人设当前状态：${isOn() ? "已开启" : "已关闭"}`,
-      ];
+      const names = list.map((c) => c.name);
+      const desc = new Map(list.map((c) => [c.name, c.description]));
+
+      const CHAT = ["new", "reset", "sessions", "load", "time", "token", "style", "help"];
+      // 宿主自帶的命令（不是本插件註冊的），單獨一組，免得混進「扩展命令」
+      const HARNESS = ["compact", "export", "feedback", "goal", "permission", "plan", "weixin-login", "weixin-logout"];
+      const groups = [
+        {
+          key: "talk",
+          title: "对话控制",
+          items: CHAT.filter((n) => n === "new" || n === "reset" || names.includes(n)).map((n) => ({
+            name: n,
+            desc:
+              {
+                new: "开始新会话（人设开关会继承）",
+                reset: "同 /new",
+                sessions: "列出最近 5 个微信对话",
+                load: "把该对话上下文载入当前会话（/load <编号>）",
+                time: "查看当前时间",
+                token: "查看 token 用量、今日累计与账户余额",
+                style: "设置早上问候风格（random|whale|imperial）",
+                help: "本菜单",
+              }[n] ?? "",
+          })),
+        },
+        {
+          key: "role",
+          title: "人设",
+          items: names.filter((n) => n === "whale" || n === "normal").map((n) => ({ name: n, desc: desc.get(n) ?? "" })),
+        },
+        {
+          key: "ping",
+          title: "通道检测",
+          items: names.filter((n) => n.startsWith("bot-")).map((n) => ({ name: n, desc: desc.get(n) ?? "" })),
+        },
+        {
+          key: "appr",
+          title: "工具审批",
+          items: names.filter((n) => n === "approve" || n === "reject").map((n) => ({ name: n, desc: desc.get(n) ?? "" })),
+        },
+        {
+          key: "ext",
+          title: "扩展命令",
+          items: names
+            .filter(
+              (n) =>
+                !CHAT.includes(n) &&
+                n !== "whale" &&
+                n !== "normal" &&
+                !n.startsWith("bot-") &&
+                n !== "approve" &&
+                n !== "reject" &&
+                !HARNESS.includes(n) &&
+                !n.startsWith("weixin-"),
+            )
+            .map((n) => ({ name: n, desc: desc.get(n) ?? "" })),
+        },
+        {
+          key: "harness",
+          title: "Harness 内置",
+          items: names
+            .filter((n) => HARNESS.includes(n) || n.startsWith("weixin-"))
+            .map((n) => ({ name: n, desc: desc.get(n) ?? "" })),
+        },
+      ].filter((g) => g.items.length > 0);
+
+      // 一條命令可以帶多行說明（description 內含 \n），第二行起縮排顯示
+      const pushItem = (arr, item) => {
+        const [head, ...more] = String(item.desc ?? "").split("\n");
+        arr.push(`/${item.name}${head ? ` — ${head}` : ""}`);
+        for (const line of more) if (line.trim()) arr.push(`    ${line}`);
+      };
+
+      const arg = String(rawInput ?? "").trim().toLowerCase();
+
+      // /help all：全部命令逐条列出
+      if (arg === "all" || arg === "full") {
+        const lines = ["📖 all commands", ""];
+        for (const g of groups) {
+          lines.push(`【${g.title}】（/help ${g.key}）`);
+          for (const item of g.items) pushItem(lines, item);
+          lines.push("");
+        }
+        lines.push(`persona: ${isOn() ? "on" : "off"}`);
+        return { kind: "success", text: lines.join("\n") };
+      }
+
+      // /help <group>：子菜单（支持首字母简写，如 /help t）
+      if (arg) {
+        const group =
+          groups.find((g) => g.key === arg) ?? groups.find((g) => g.key[0] === arg) ??
+          groups.find((g) => g.title === arg);
+        if (group) {
+          const lines = [`📂 ${group.title} · /help ${group.key}`, ""];
+          for (const item of group.items) pushItem(lines, item);
+          lines.push("", "回目录 /help ｜ 全部 /help all");
+          return { kind: "success", text: lines.join("\n") };
+        }
+        const keys = groups.map((g) => g.key).join(" / ");
+        return { kind: "error", text: `没有「${arg}」这组。可用：${keys}（或首字母）` };
+      }
+
+      // 默认：目录
+      const lines = [`🤖 help · ${names.length} cmds · ${groups.length} groups`, ""];
+      for (const g of groups) {
+        lines.push(`/help ${g.key.padEnd(5)} ${g.title}（${g.items.length}）`);
+      }
+      lines.push("", `/help all 一次看全部 ｜ persona: ${isOn() ? "on" : "off"}`);
       return { kind: "success", text: lines.join("\n") };
     },
   });

@@ -1,6 +1,6 @@
 {
   "name": "dsh-whale-commands",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Slash commands for the DeepSeek Harness Weixin channel: persona toggle, session history, token usage and balance, scheduled daily greetings. Executed host-side, so they cost no model tokens and hot-reload without restarting dsh web.",
   "type": "module",
   "license": "AGPL-3.0",
