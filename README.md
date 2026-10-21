@@ -182,13 +182,13 @@ DRY_RUN=1 FORCE_DOW=3 FORCE_STYLE=whale bash ~/.dsh/.whale-commands/greetings/mo
 ### 从菜单里隐藏别的插件的命令
 
 同一宿主上如果还有**其它插件**注册了斜杠命令，`/help` 会把它们归进「扩展命令」组。
-不想让它们出现在菜单里（比如那是你自己的私人命令），就在
+不想让它们出现在菜单里（比如只对你自己有意义的那几条），就在
 `~/.dsh/.whale-commands/hidden.commands` 里一行写一个命令名：
 
 ```
 # 注释行
-private-a
-private-b
+example-a
+example-b
 ```
 
 - **只影响菜单展示，命令本身照常可用**
@@ -231,6 +231,22 @@ sync-version.sh --check    # 不一致则退出码 1
 
 ```bash
 sync-version.sh --bump minor    # 先手升基线，再同步指纹
+```
+
+### 提交前自检
+
+仓库自带一个通用扫描脚本（规则里不写死任何用户名/主机名/业务词）：
+
+```bash
+./scripts/scan-secrets.sh              # 扫已跟踪文件 + git 历史
+./scripts/scan-secrets.sh --worktree   # 只扫工作树
+```
+
+它会拦三类东西：密钥/凭据形态、某个用户 home 下的绝对路径、以及不该被跟踪的
+凭据类文件（`.env` / `*.pem` / `*.key`）。有命中退出码 1，可以直接当 pre-push 钩子：
+
+```bash
+ln -sf ../../scripts/scan-secrets.sh .git/hooks/pre-push
 ```
 
 ---
@@ -294,6 +310,12 @@ sync-version.sh --bump minor    # 先手升基线，再同步指纹
 - 除「注入人设」「主动推送」「查余额」外无其它网络请求
 
 ## 变更记录
+
+### 1.1.2
+
+- 新增 `scripts/scan-secrets.sh`：提交前自检（密钥形态 / 本机绝对路径 / 凭据类文件名 / git 历史）
+- 文档与示例去掉可能暗示本机私有配置的措辞（`hidden.commands` 示例改成通用名字）
+- 清理仓库对象库里两个不可达的历史残留 blob
 
 ### 1.1.1
 

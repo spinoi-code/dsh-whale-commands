@@ -13,7 +13,7 @@ credentials.yaml
 *.pem
 *.key
 
-# 本地状态与会话正文（可能含私人对话）
+# 本地状态与会话正文（可能含用户对话）
 .whale-commands/
 sessions/
 

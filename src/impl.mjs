@@ -55,7 +55,7 @@ const LOG_FILE = join(STATE_DIR, "plugin.log");
 /**
  * 菜单隐藏名单：一行一个命令名（`#` 开头为注释，文件不存在则不过滤）。
  * 用途：同一宿主上其它插件的命令不想出现在 /help 里时，把它们写进这个文件即可 ——
- * 机制本身不认识任何具体命令名，所以这里不含任何私有信息。
+ * 机制本身不认识任何具体命令名，因此这份代码不携带任何具体名单。
  */
 const HIDDEN_FILE = join(STATE_DIR, "hidden.commands");
 /** zstd 可执行文件；会话日志是多帧 zstd，Node 内置解压只解第一帧。 */
