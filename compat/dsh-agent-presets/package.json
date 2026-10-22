@@ -1,0 +1,12 @@
+{
+  "name": "@deepseek-ai/dsh-agent-presets",
+  "version": "0.2.0-compat-shim",
+  "description": "兼容垫片：harness 0.2 移除了本包（拆成 dsh-agent-preset + registry），而 0.1 时代的通道插件仍从这里导入 resolveSessionPreset。装进 profile 的 node_modules 即可让这些插件在 0.2 上加载。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    }
+  }
+}

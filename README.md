@@ -2,24 +2,38 @@
 
 一个给 **DeepSeek Harness 微信通道**用的扩展命令插件。
 
-装上之后，你可以在微信里发斜杠命令直接控制 Harness 会话：切换人设、翻历史对话、
-查 token 用量和账户余额、设置每天早上的定时问候。
+装上之后，你可以在微信里发斜杠命令直接控制 Harness 会话：**在 11 套人设之间切换**、
+翻历史对话（可注入上下文，也可**真切换会话**）、切换模型、查 token 用量与余额、
+设置每天早上的定时问候。
+
+> 命令不止 `/whale` 一个：本插件注册 **11 条命令**，`/help` 菜单里连同宿主内置命令共 **20+ 条 / 5 个分组**。
+> 人设也从「一个鲸鱼娘开关」升级成**可切换的人设库**（`/persona`）。
 
 **命令由宿主进程直接执行，不经过模型。** 所以它们不消耗 token、结果确定、响应即时，
 适合放控制类操作。插件同时支持热挂载：改配置或代码后不需要重启 `dsh web`。
 
 ![status](https://img.shields.io/badge/status-可用-brightgreen)
-![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.7-blue)
+![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1%20%7C%200.2-blue)
+![version](https://img.shields.io/badge/version-1.2.0-orange)
+![branch](https://img.shields.io/badge/branch-feat%2Fharness--0.2-lightgrey)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 ---
 
+> **本 README 对应分支 `feat/harness-0.2`（v1.2.0，尚未合入 main）。**
+> 相比 main 的 1.1.2：新增 11 套人设库 / 模型切换 / 自诊断，并修复了 harness 0.2 的兼容问题；
+> 同时新增 `compat/` 与 `patches/`，让 0.1 时代的通道插件能跑在 0.2 上。
+> 合并前请跑一遍 `scripts/scan-secrets.sh` 与自检（见文末）。
+
+
 ## 目录
 
 - [命令一览](#命令一览)
+- [兼容性（0.1 / 0.2）](#兼容性harness-01-与-02)
+- [从 0.1 升级到 0.2](#从-01-升到-02-需要注意)
 - [技术要点](#技术要点)
 - [安装](#安装)
-- [使用](#使用)：[人设](#人设) · [用量与余额](#用量与余额) · [历史对话](#历史对话) · [定时问候](#定时问候) · [隐藏别人的命令](#从菜单里隐藏别的插件的命令)
+- [使用](#使用)：[人设](#人设11-套可切换) · [用量与余额](#用量与余额) · [历史对话](#历史对话) · [定时问候](#定时问候) · [隐藏别人的命令](#从菜单里隐藏别的插件的命令)
 - [改代码后必须做的一步](#改代码后必须做的一步)
 - [卸载](#卸载) · [故障排查](#故障排查) · [环境变量](#环境变量)
 - [架构与踩坑记录](docs/ARCHITECTURE.md)
@@ -33,13 +47,18 @@
 | `/whale` | 开启「鲸鱼娘·大肥鱼」人设 |
 | `/normal` | 退出人设，恢复正常口吻 |
 | `/sessions` | 列出最近 5 个对话（标题、时间、提问数） |
-| `/load <编号>` | 把该对话最近上下文载入当前会话 |
+| `/load <编号>` | 把该对话最近上下文载入当前会话（各版本通用） |
+| `/load <编号> --hard` | **真切换**到该对话（需通道补丁；见「兼容性」） |
+| `/persona [编号\|id\|off]` | 人设库（11 套）：切换 / 关闭 / 查看 |
+| `/model [模型\|default ...]` | 切换本会话模型、设置 /new 默认模型 |
+| `/version` | 插件版本 + 通道补丁自诊断 |
 | `/time` | 当前服务器时间 |
 | `/token` | 本会话用量 + 今日累计 + 账户余额 |
 | `/style` | 设置早间问候风格 |
-| `/help` | 动态列出全部命令 |
+| `/help [组\|all]` | 分组菜单（talk/model/role/ext/harness），`/help all` 看全量 |
 
-外加**定时问候**：每天 7:00 推一条「请安 + 鼓励」，两种文风 50% 随机。
+外加**定时问候**：每天 7:00 推一条「请安 + 鼓励」，文风由 `/style` 控制——
+`auto`（跟随当前人设，默认）/ `random`（11 套人设全员随机）/ `<人设id>` 固定一个。
 
 ---
 
@@ -53,7 +72,8 @@
 4. **机器人能主动找你** —— iLink 的 `context_token` 是可选字段，所以没有入站消息也能推送。
 5. **重挂不会把命令弄丢** —— 进程级注册去重 + 自愈重试（这条是踩坑踩出来的，见下）。
 6. **版本号与内容强绑定** —— 内容哈希写进 `config.version`，杜绝「改了代码但没生效」。
-7. **`/help` 按宿主注册表自动分组** —— 命令表越大越长，所以 `/help` 只出目录（按用途分组），`/help <group>` 进子菜单看细节，`/help all` 一次列全。分组从 `ctx.commands.list()` 动态推导，装了别的插件也会自动归位；`description` 里带换行的命令，子菜单会缩进展开成多行说明。
+7. **同一份代码跨 harness 版本** —— 用运行时探测（`commands.execute.length`、服务方法存在性）代替版本判断，`/version` 会把结果告诉你。
+8. **`/help` 按宿主注册表自动分组** —— 命令表越大越长，所以 `/help` 只出目录（按用途分组），`/help <group>` 进子菜单看细节，`/help all` 一次列全。分组从 `ctx.commands.list()` 动态推导，装了别的插件也会自动归位；`description` 里带换行的命令，子菜单会缩进展开成多行说明。
 
 细节与全部踩坑记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -74,7 +94,43 @@ cd dsh-whale-commands
 ./install.sh
 ```
 
-装完等几秒（Cordis HMR 自动挂载），在微信里发 `/help` 验证。
+装完等几秒（Cordis HMR 自动挂载），在微信里依次发：
+
+```
+/version   → 看清版本、会话目录、通道补丁状态
+/help      → 分组菜单（20+ 条命令 / 5 组）
+/persona   → 11 套人设列表
+```
+
+### 装在哪一版 harness？（0.1 / 0.2 都行）
+
+安装命令**两个版本完全一样**，插件本体同时兼容：
+
+| 你的 harness | 直接装 | 需要额外做的 |
+|:--|:--|:--|
+| 0.1.x（rc.7 一系） | ✅ | 无 |
+| 0.2.x | ✅ | 如果同时用其它 0.1 时代的通道插件，装 `compat/dsh-agent-presets` 垫片；想要 `/load --hard` 真切换，再打 `patches/` 里的补丁 |
+
+装完先发 **`/version`** 自诊断：它会告诉你当前通道是否支持真切换、会话目录在哪。
+
+### 更新（以后升级插件）
+
+```bash
+cd dsh-whale-commands && git pull
+./install.sh                 # 覆盖安装
+# 拿到新代码后必须同步版本号（否则 Cordis 认为没变、不会重挂）：
+(cd "$HOME/.dsh/profiles/web/plugins/whale-commands" && ./sync-version.sh)
+sudo systemctl restart deepseek-harness      # 或重启你自己的 dsh web
+```
+
+> 版本号规则：`1.2.0+<内容哈希>`。哈希由脚本算，**不要手改**。
+
+### 从 0.1 升到 0.2 需要注意
+
+1. 先升 harness，再确认本插件能加载（`/version`）
+2. 另外那批通道插件（lark / qqbot / wecom / agentchat / weixin）会因 `@deepseek-ai/dsh-agent-presets` 被移除而加载失败 → 装 `compat/` 垫片
+3. `/load <n> --hard` 需要通道补丁；没有补丁时**自动拒绝并提示**，默认的 `/load <n>`（注入上下文）照常可用
+4. 会话日志格式从 v0 变 v4：旧会话不会被自动迁移，`/sessions` 只列得出现在能读的会话
 
 ### 连定时问候一起装
 
@@ -92,21 +148,32 @@ DSH_HOME=/path/to/.dsh ./install.sh
 
 ## 使用
 
-### 人设
+> **关于 token 相关命令**：`/token` 会优先查官方用量与余额，需要你在
+> `$DSH_HOME/.credentials.yaml` 里提供 `DEEPSEEK_USER_TOKEN`（可选）。
+> **首次使用不强制绑定**——没配也能用，只是退化成「仅本地统计」，命令会明确提示。
+
+
+### 人设（11 套，可切换）
 
 ```
-你：/whale
-🤖：鲸鱼娘模式已开启喵～本小姐这就在了。
-你：今天写点什么好
-🤖：哼，笨蛋主人，本鲸鱼娘陪你一起想嘛～（摇尾巴）
+你：/persona            ← 列出全部人设（编号 + 简介）
+你：/persona 3          ← 切到第 3 套
+你：/persona maid       ← 也可用 id 切
+你：/persona off        ← 关掉，恢复普通口吻
+你：/whale               ← 老入口仍可用（等于切回鲸鱼娘）
+你：/normal             ← 老入口仍可用（等于关闭）
 ```
 
-**人设是「粘住」的**：开了之后，以后每个 `/new` 出来的会话都会自动继承。想彻底关掉得发 `/normal`。
-
-改人设文案：编辑 `~/.dsh/profiles/web/plugins/whale-commands/impl.mjs` 里的 `PERSONA` 常量，
-然后跑 `sync-version.sh`（见下文）。
+- **人设是「粘住」的**：开了之后，后续每个 `/new` 出来的会话都会自动继承；关掉要用 `/persona off`（或 `/normal`）。
+- 人设文案与列表在 `src/personas.mjs`（公开版共 11 套），改完跑 `sync-version.sh` 即生效。
+- 新版本还支持 `/style`：早间定时问候按 `auto`（跟随当前人设）/ `random`（全员随机）/ 指定人设 发。
 
 ### 用量与余额
+
+> **可选的官方数据**：官方用量/余额查询需要 `DEEPSEEK_USER_TOKEN`（放在
+> `$DSH_HOME/.credentials.yaml` 里，602/600 权限）。**不绑定也能用**——
+> `/token` 会退化成「仅本地统计」并在输出里明确标注；绑不绑由你决定，本插件不会强求。
+
 
 ```
 你：/token
@@ -273,6 +340,11 @@ ln -sf ../../scripts/scan-secrets.sh .git/hooks/pre-push
 | `/token` 余额查询失败 | 检查 `~/.dsh/.credentials.yaml` 里的 `DEEPSEEK_API_KEY` |
 | 定时问候没收到 | 先 `DRY_RUN=1 bash ~/.dsh/.whale-commands/greetings/morning.sh` 看文风对不对；再看 `greetings.log`。若日志里有 `NODE: unbound variable`，是 1.1.0 及更早的 bug，升级到 1.1.1 |
 | Web GUI 里发这几个命令回「只在微信通道可用」 | 预期行为，避免跨通道读微信会话 |
+| 升级 0.2 后所有命令都回「执行 Harness 命令时发生错误」 | 通道插件没适配 0.2：`commands.execute` 参数从 3 个变 4 个。见 `patches/` |
+| 报 `format v4 message requires a producer-owned source kind` | 某条消息用了 `source.kind="plugin"`（0.2 禁止）。本插件 1.2.0 已修；旧版本需升级 |
+| 报 `session ... is already owned by an active write handle` | 同一会话被两个实例/两次写入占用：确认没开第二个 `dsh web`，等几秒重发 |
+| 通道插件 `ERR_MODULE_NOT_FOUND: dsh-agent-presets` | 装 `compat/dsh-agent-presets` 垫片 |
+| 升级后 `/load --hard` 说「通道未打补丁」 | 正常：先看 `/version`，需要真切换就按 `patches/README.md` 打补丁 |
 
 **这个插件出错不会让服务起不来** —— 入口已加固，失败只会降级成「没有命令」。
 
@@ -292,7 +364,30 @@ ln -sf ../../scripts/scan-secrets.sh .git/hooks/pre-push
 
 ---
 
-## 兼容性
+---
+
+## 兼容性：harness 0.1 与 0.2
+
+本插件**一份代码同时支持两个版本**，差异只在「真切换会话」这一项：
+
+| harness | 插件本体 | 通道补丁 | `/load <n>` | `/load <n> --hard` |
+|---|---|---|---|---|
+| 0.1.x（rc.7） | ✅ 直接可用 | 可选 | 注入上下文 | 打补丁后可用 |
+| 0.2.x | ✅ 直接可用 | **建议打** | 注入上下文 | 打补丁后可用 |
+
+发 `/version` 可自诊断：会告诉你当前通道是否已打「真切换」补丁。
+
+### 让 0.1 时代的通道插件跑在 0.2 上
+
+0.2 移除了 `@deepseek-ai/dsh-agent-presets` 包，导致一批为 0.1 写的通道插件（`lark` / `qqbot` / `wecom` / `agentchat` / `weixin`）
+在 0.2 上 `ERR_MODULE_NOT_FOUND`。仓库提供两样东西：
+
+1. **兼容垫片** `compat/dsh-agent-presets/`：补回插件仍在使用的 `resolveSessionPreset`，装进 profile 的 `node_modules` 即可
+2. **通道补丁** `patches/`：说明 0.2 与 0.1 的 8 处 API/格式差异，并给出可直接套用的补丁
+
+> 注意：补丁作用于第三方插件 `deepseek-harness-weixin`（MIT），请遵守其许可证并在你自己部署内使用。
+
+## 兼容性（原章节）
 
 - 在 **DeepSeek Harness `0.1.0-rc.7`** + **deepseek-harness-weixin `0.2.5`** 上验证通过
 - 依赖 Harness 的 internal API（`ctx.commands.register`、`agent.inject`、`agent/created`），跨大版本可能需要适配
@@ -310,6 +405,16 @@ ln -sf ../../scripts/scan-secrets.sh .git/hooks/pre-push
 - 除「注入人设」「主动推送」「查余额」外无其它网络请求
 
 ## 变更记录
+
+### 1.2.0
+
+- 新增 `/persona` 人设库（11 套）、`/model` 模型切换、`/version` 自诊断
+- `/load` 支持 `--hard` 真切换（默认仍为注入上下文，向后兼容）
+- **修复**：人设注入消息的来源类型改为生产者名，解决 harness 0.2 的
+  `format v4 message requires a producer-owned source kind` 校验失败
+- **修复**：全部路径改为跟随 `DSH_HOME`（不再写死 `~/.dsh`），支持自定义 home
+- 新增 `compat/` 兼容垫片与 `patches/` 说明，让 0.1 时代的通道插件可在 0.2 上运行
+- 文档补充 0.1 → 0.2 的 8 处 API/格式差异与迁移步骤
 
 ### 1.1.2
 

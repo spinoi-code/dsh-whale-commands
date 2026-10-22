@@ -1,0 +1,361 @@
+--- /tmp/up2.js	2026-10-22 23:09:49.475383920 +0800
++++ /tmp/patched-clean.js	2026-10-22 23:16:05.344940354 +0800
+@@ -120,7 +120,7 @@
+   ].join("\n");
+ }
+ function approvalDetail(request) {
+-  const call = request.callId === void 0 ? void 0 : [...request.agent.session.events].reverse().find((event) => event.type === "tool/call" && event.data.callId === request.callId);
++  const call = request.callId === void 0 ? void 0 : [...sessionEventsOf(request.agent.session)].reverse().find((event) => event.type === "tool/call" && event.data.callId === request.callId);
+   if (call?.type === "tool/call") {
+     try {
+       const parsed = JSON.parse(call.data.arguments);
+@@ -143,7 +143,7 @@
+ // src/conversations.ts
+ // [fork] dsh 0.2 已移除 @deepseek-ai/dsh-agent-presets 包，此处内联等价实现
+ function resolveSessionPreset(session) {
+-	const events = (session && session.events) || [];
++	const events = (session && sessionEventsOf(session)) || [];
+ 	for (let index = events.length - 1; index >= 0; index -= 1) {
+ 		const event = events[index];
+ 		if (event && event.type === "agent-preset/selected") return event.data.agentPreset;
+@@ -234,7 +234,7 @@
+     );
+     if (data.byteLength > maxBytes) throw new Error(`Weixin image exceeds the ${maxBytes}-byte attachment limit`);
+     const mediaType = detectImageMediaType(data);
+-    const ref = await ctx.attachments.saveImage({ data, mediaType });
++    const ref = await saveImageCompat(ctx.attachments, { data, mediaType });
+     totalImageBytes += ref.bytes;
+     if (includeImages) {
+       imageBlocks.push({ type: "image", attachment: ref });
+@@ -466,7 +466,13 @@
+       this.ctx.permissionPresets.resolve(this.config.permissionPreset);
+     }
+     const headers = await this.ctx.sessionPersistence.list();
+-    this.persistedIds = new Set(headers.map((header) => String(header.id)));
++    // [fork] 0.2 的 list() 返回 SessionPersistenceSnapshot[]，id 在 header.id 上
++    this.persistedIds = new Set(
++      headers
++        .map((item) => item?.header?.id ?? item?.id ?? item?.sessionId)
++        .filter((id) => id !== void 0 && id !== null)
++        .map((id) => String(id))
++    );
+   }
+   /** Process one inbound message after earlier work for the same Weixin user. */
+   process(message, api, sendApprovalPrompt) {
+@@ -497,6 +503,35 @@
+     this.rotations.set(baseId, tracked);
+     return current;
+   }
++  /** [fork] 真切换：把当前微信对话绑定到指定历史会话（路由层切换）。 */
++  async switchConversation(message, targetId) {
++    const baseId = sessionIdFor(this.accountId, message);
++    const currentId = this.activeIdFor(baseId);
++    if (targetId === currentId) return { ok: true, already: true, targetId };
++    if (this.bindings.has(targetId)) return { ok: true, already: true, targetId };
++    if (!this.persistedIds.has(targetId)) return { ok: false, reason: "not-found", targetId };
++    this.approvals.cancelConversation(currentId);
++    const agent = this.bindings.get(currentId)?.agent ?? this.ctx.agents.get(SessionId(currentId));
++    if (agent !== void 0 && agent.status !== "idle") agent.cancel({ kind: "user" });
++    // [fix] 本方法在命令队列内部调用，此时 queues.get(currentId) 就是自己那条链，
++    // await 它会永久挂起（还会连带堵死整条会话队列）；串行性已由队列本身保证。
++    if (agent !== void 0) {
++      await withTimeout(agent.whenIdle(), this.config.responseTimeoutMs, "DeepSeek Harness session switch").catch(() => void 0);
++    }
++    const binding = this.bindings.get(currentId);
++    if (binding !== void 0) {
++      this.bindings.delete(currentId);
++      await binding.release();
++    }
++    this.activeIds.set(baseId, targetId);
++    try {
++      await this.getOrCreate(targetId);
++    } catch (error) {
++      this.activeIds.set(baseId, currentId);
++      throw error;
++    }
++    return { ok: true, already: false, targetId };
++  }
+   enqueue(id, operation) {
+     const previous = this.queues.get(id) ?? Promise.resolve();
+     const current = previous.catch(() => void 0).then(operation);
+@@ -543,7 +578,7 @@
+       agent.session.header?.cwd ?? this.config.cwd
+     );
+     await withTimeout(agent.whenIdle(), this.config.responseTimeoutMs, "DeepSeek Harness conversation availability");
+-    const start = agent.session.events.length;
++    const start = sessionEventsOf(agent.session).length;
+     const userMessage = createUserMessage({ content, source: { kind: "user" } });
+     const sendPrompt = sendApprovalPrompt ?? ((text) => {
+       const to = message.from_user_id?.trim();
+@@ -563,7 +598,7 @@
+         agent.cancel({ kind: "user" });
+         throw error;
+       }
+-      return this.collectReply(agent, agent.session.events.slice(start), userMessage.id);
++      return this.collectReply(agent, sessionEventsOf(agent.session).slice(start), userMessage.id);
+     } finally {
+       stopApprovalAnswerer();
+     }
+@@ -571,12 +606,17 @@
+   async executeCommandNow(id, message, line, api, sendApprovalPrompt) {
+     const binding = await this.getOrCreate(id);
+     const agent = binding.agent;
+-    await withTimeout(agent.whenIdle(), this.config.responseTimeoutMs, "DeepSeek Harness command availability");
++    try {
++      await withTimeout(agent.whenIdle(), this.config.responseTimeoutMs, "DeepSeek Harness command availability");
++    } catch (error) {
++      // [fork] 0.2 的 agent 可能没有 whenIdle/签名不同：不阻塞命令执行，只记日志
++      this.log.warn("weixin: 等待 agent 空闲失败，继续执行命令：%s", String(error && error.message ? error.message : error));
++    }
+     const parsed = parseCommand(line);
+     if (parsed === void 0) {
+       return { kind: "unknown", available: this.ctx.commands.list(agent).map((command) => `/${command.name}`) };
+     }
+-    const start = agent.session.events.length;
++    const start = sessionEventsOf(agent.session).length;
+     const sendPrompt = sendApprovalPrompt ?? ((text) => {
+       const to = message.from_user_id?.trim();
+       if (!to) return Promise.reject(new Error("Weixin approval has no target user"));
+@@ -592,7 +632,11 @@
+       controller.abort(new Error(`DeepSeek Harness command timed out after ${this.config.responseTimeoutMs}ms`));
+     }, this.config.responseTimeoutMs);
+     try {
+-      const execution = await this.ctx.commands.execute(agent, line, controller.signal);
++      // [fork] 0.2 的 commands.execute 是 (agent, line, submittedAttachments, signal)；rc.7 是 (agent, line, signal)
++      const execFn = this.ctx.commands.execute;
++      const execution = execFn.length >= 4
++        ? await execFn.call(this.ctx.commands, agent, line, [], controller.signal)
++        : await execFn.call(this.ctx.commands, agent, line, controller.signal);
+       if (execution === void 0) {
+         return { kind: "unknown", available: this.ctx.commands.list(agent).map((command) => `/${command.name}`) };
+       }
+@@ -603,7 +647,46 @@
+         agent.cancel({ kind: "user" });
+         throw error;
+       }
+-      const generated = await this.collectLatestReply(agent, agent.session.events.slice(start));
++      let generated;
++      try {
++        generated = await this.collectLatestReply(agent, sessionEventsOf(agent.session).slice(start));
++      } catch (error) {
++        this.log.warn("weixin: 收集命令回复失败，只用结果文本：%s", String(error && error.message ? error.message : error));
++        generated = void 0;
++      }
++      // [fork] /load 真切换：whale-commands 会把目标会话写进 pending-switch.json
++      try {
++        const fsMod = await import("node:fs/promises");
++        const pathMod = await import("node:path");
++        const whaleHome = process.env.DSH_HOME ?? join2(homedir(), ".dsh");
++        const pendingFile = pathMod.join(whaleHome, ".whale-commands", "pending-switch.json");
++        const pendingRaw = await fsMod.readFile(pendingFile, "utf8").catch(() => void 0);
++        if (pendingRaw !== void 0) {
++          await fsMod.unlink(pendingFile).catch(() => void 0);
++          let pendingTarget;
++          try { pendingTarget = JSON.parse(pendingRaw)?.targetId; } catch { pendingTarget = void 0; }
++          if (typeof pendingTarget === "string" && pendingTarget.length > 0) {
++            const switched = await this.switchConversation(message, pendingTarget);
++            return {
++              kind: "handled",
++              reply: switched.ok
++                ? { text: "\u5df2\u771f\u5207\u6362\u5230\u4f1a\u8bdd\uff1a" + (switched.already ? "\uff08\u5c31\u662f\u5f53\u524d\u4f1a\u8bdd\uff09" : pendingTarget), images: [], files: [] }
++                : { text: "\u5207\u6362\u5931\u8d25\uff1a\u627e\u4e0d\u5230\u4f1a\u8bdd " + pendingTarget, images: [], files: [] }
++            };
++          }
++        }
++      } catch (error) {
++        const reason = String(error && error.message ? error.message : error);
++        try {
++          const fsMod = await import("node:fs/promises");
++          const home = process.env.DSH_HOME ?? join2(homedir(), ".dsh");
++          await fsMod.appendFile(home + "/logs/cmd-error.log", new Date().toISOString() + " switch: " + reason + "\n");
++        } catch (e) {}
++        if (/producer-owned source kind|format v4/i.test(reason)) {
++          return { kind: "handled", reply: { text: "这个会话的旧格式无法切换（0.2 的 v4 校验拒绝），当前会话保持不变。", images: [], files: [] } };
++        }
++        return { kind: "handled", reply: { text: "切换失败：" + reason.slice(0, 120), images: [], files: [] } };
++      }
+       const resultText = execution.result.kind === "error" ? `\u547D\u4EE4\u6267\u884C\u5931\u8D25\uFF1A${execution.result.text}` : execution.result.text?.trim() || `\u547D\u4EE4 /${parsed.name} \u5DF2\u6267\u884C\u3002`;
+       return {
+         kind: "handled",
+@@ -701,11 +784,18 @@
+     const current = this.ctx.agentDefaultModel.currentSelection();
+     const agentOptions = { provider: current.provider, model: current.model };
+     if (this.persistedIds.has(id)) {
+-      const inspected = await this.ctx.sessionPersistence.inspect(sessionId);
+-      const agentPreset2 = resolveSessionPreset({
+-        header: inspected.meta,
+-        events: inspected.events
+-      }) ?? this.resolveAgentPreset();
++      // [fork] 0.2 的 sessionPersistence 没有 inspect（只有 open/list/stat），有则用、没有退回配置默认
++      let agentPreset2 = this.resolveAgentPreset();
++      try {
++        const sp = this.ctx.sessionPersistence;
++        if (typeof sp.inspect === "function") {
++          const inspected = await sp.inspect(sessionId);
++          agentPreset2 = resolveSessionPreset({
++            header: inspected?.meta ?? inspected?.header,
++            events: inspected?.events ?? []
++          }) ?? agentPreset2;
++        }
++      } catch (e) { /* 忽略，用配置默认预设 */ }
+       try {
+         return this.ownAgent(await this.ctx.agents.resume({
+           resumeSessionId: sessionId,
+@@ -730,12 +820,30 @@
+     } catch (error) {
+       const raced = this.ctx.agents.get(sessionId);
+       if (raced !== void 0) return this.borrowAgent(raced);
++      // [fork] 磁盘上已有该会话但初始化快照没收录时，create 会抛 SessionAlreadyExists；
++      // 这种情况改用 resume，避免「会话已存在」把整条命令链打断。
++      if (/already exists/i.test(String(error && error.message ? error.message : error))) {
++        this.persistedIds.add(id);
++        let resumedPreset = agentPreset;
++        try {
++          const sp = this.ctx.sessionPersistence;
++          if (typeof sp.inspect === "function") {
++            const inspected = await sp.inspect(sessionId);
++            resumedPreset = resolveSessionPreset({ header: inspected?.meta ?? inspected?.header, events: inspected?.events ?? [] }) ?? agentPreset;
++          }
++        } catch (e) { /* 忽略 */ }
++        return this.ownAgent(await this.ctx.agents.resume({
++          resumeSessionId: sessionId,
++          agentOptions,
++          setup: (agentCtx) => this.setupAgent(agentCtx, resumedPreset)
++        }));
++      }
+       throw error;
+     }
+     this.persistedIds.add(id);
+     handle.agent.inject(createUserMessage({
+       content: [{ type: "text", text: this.config.systemPrompt }],
+-      source: { kind: "plugin", plugin: "deepseek-harness-weixin", form: "instructions" }
++      source: { kind: "weixin-channel", plugin: "deepseek-harness-weixin", form: "instructions" }
+     }));
+     return this.ownAgent(handle);
+   }
+@@ -750,11 +858,29 @@
+   }
+   async setupAgent(agentCtx, agentPreset, permissionPreset) {
+     await this.ctx.agentPresets.mount(agentCtx, agentPreset);
+-    if (permissionPreset !== void 0) {
+-      const agent = agentCtx.agent;
+-      if (agent === void 0) throw new Error("weixin-channel: Agent setup context has no Agent");
+-      this.ctx.permissionPresets.set(agent.session, permissionPreset);
++    if (permissionPreset === void 0) return;
++    // [fork] 0.2 起 agentCtx.agent 需要 inject 才能直接取；取不到时退化为按会话查找，仍然失败就跳过
++    let agent;
++    try {
++      agent = agentCtx.agent;
++    } catch (error) {
++      agent = void 0;
+     }
++    if (agent === void 0) {
++      try {
++        const session = agentCtx.session;
++        if (session !== void 0) {
++          const found = [...this.ctx.agents.list()].find((candidate) => candidate.session === session);
++          agent = found;
++        }
++      } catch (error) {
++        agent = void 0;
++      }
++    }
++    if (agent === void 0) {
++      return;
++    }
++    this.ctx.permissionPresets.set(agent.session, permissionPreset);
+   }
+   async collectReply(agent, events, userMessageId) {
+     const texts = [];
+@@ -773,7 +899,7 @@
+       for (const block of finalMessage.data.message.content) {
+         if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
+         if (block.type === "image") {
+-          const stored = await this.ctx.attachments.readImage(block.attachment);
++          const stored = await readImageCompat(this.ctx.attachments, block.attachment);
+           images.push({
+             data: stored.data,
+             mediaType: stored.ref.mediaType,
+@@ -811,7 +937,7 @@
+       for (const block of finalMessage.data.message.content) {
+         if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
+         if (block.type === "image") {
+-          const stored = await this.ctx.attachments.readImage(block.attachment);
++          const stored = await readImageCompat(this.ctx.attachments, block.attachment);
+           images.push({
+             data: stored.data,
+             mediaType: stored.ref.mediaType,
+@@ -1611,7 +1737,22 @@
+         }
+       } catch (error) {
+         this.log.error("Weixin Harness command failed: %s", String(error));
+-        await this.sendReply(message, api, { text: "\u6267\u884C Harness \u547D\u4EE4\u65F6\u53D1\u751F\u9519\u8BEF\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002", images: [], files: [] });
++        try {
++          const fsMod = await import("node:fs/promises");
++          const home = process.env.DSH_HOME ?? join2(homedir(), ".dsh");
++          await fsMod.appendFile(home + "/logs/cmd-error.log",
++            new Date().toISOString() + " " + String(error && error.stack ? error.stack : error).slice(0, 2000) + "\n");
++        } catch (e) {}
++        {
++          const __msg = String(error && error.message ? error.message : error);
++          const __owned = /already owned by an active write handle|SessionAlreadyOwned/i.test(__msg);
++          await this.sendReply(message, api, {
++            text: __owned
++              ? "会话正被另一个写入占用（常见于同时开了多个实例或刚重启）。等几秒再发一次；持续出现请检查是否有第二个 dsh 实例在跑。"
++              : "执行 Harness 命令时发生错误，请稍后重试。",
++            images: [], files: []
++          });
++        }
+       }
+       return;
+     }
+@@ -1690,7 +1831,32 @@
+ function resolveStatePath(configured, accountId) {
+   if (configured) return configured;
+   const digest = createHash("sha256").update(accountId).digest("hex").slice(0, 16);
+-  return join2(homedir(), ".dsh", "weixin", `${digest}.sync.json`);
++  const home = process.env.DSH_HOME ?? join2(homedir(), ".dsh");
++  return join2(home, "weixin", `${digest}.sync.json`);
++}
++/** [fork] 附件 API 兼容：rc.7 用 saveImage/readImage，0.2 改成 saveImages/readImageRequest */
++async function saveImageCompat(attachments, input) {
++  if (typeof attachments.saveImage === "function") return attachments.saveImage(input);
++  if (typeof attachments.saveImages === "function") {
++    const refs = await attachments.saveImages([input]);
++    return Array.isArray(refs) ? refs[0] : refs;
++  }
++  throw new Error("attachments: 没有可用的保存图片方法");
++}
++async function readImageCompat(attachments, ref) {
++  if (typeof attachments.readImage === "function") return attachments.readImage(ref);
++  if (typeof attachments.readImageRequest === "function") {
++    return attachments.readImageRequest(ref, { width: 1024, height: 1024, maxBytes: 4 * 1024 * 1024 });
++  }
++  throw new Error("attachments: 没有可用的读取图片方法");
++}
++/** [fork] rc.7 用 sessionEventsOf(session) 数组；0.2 改成 snapshotEvents() 等方法 */
++function sessionEventsOf(session) {
++  if (session === void 0 || session === null) return [];
++  if (Array.isArray(session.events)) return session.events;
++  if (typeof session.snapshotEvents === "function") return session.snapshotEvents();
++  if (typeof session.ownEvents === "function") return session.ownEvents();
++  return [];
+ }
+ function shortId2(value) {
+   return value.length <= 12 ? value : value.slice(0, 12);
+@@ -1802,6 +1968,7 @@
+       }
+     });
+     bridge.startInBackground();
++  }
+     control?.startInBackground();
+     return async () => {
+       unregisterLogin();
+@@ -1811,6 +1978,7 @@
+   }, "deepseek-harness-weixin.lifecycle");
+ }
+ function apply(ctx, config) {
++
+   const bridge = new WeixinHarnessBridge(ctx, config);
+   const control = new WeixinControlServer(
+     resolveControlSocketPath(config.controlSocketPath),

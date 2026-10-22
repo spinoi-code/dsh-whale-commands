@@ -304,3 +304,29 @@ README 写了 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_US
 **通用教训**：凡是「把写死的东西变成变量/探测」的重构，都要配一个能跑通**完整链路**的
 自检（桩替换掉真正发消息的那一步），否则最容易坏的恰恰是最后那一步。
 
+
+---
+
+## 附录：harness 0.1 → 0.2 迁移实录（2026-10）
+
+0.2 删掉了 181 个包、改了 8 处与通道插件相关的接口/格式。实际踩到的坑按「致命程度」排序：
+
+| 严重度 | 现象 | 真正原因 | 修法 |
+|:--|:--|:--|:--|
+| 🔴 全炸 | 任何命令都回「执行 Harness 命令时发生错误」 | `commands.execute` 从 3 参变 4 参，signal 被塞进附件位 | 自适应传参 + 附件传 `[]` |
+| 🔴 全炸 | `cannot get property "agent" without inject` | 0.2 的 Cordis 要求 inject 才能读 `agentCtx.agent` | 容错取值，取不到跳过权限预设 |
+| 🟠 切换/续聊炸 | `format v4 message requires a producer-owned source kind` | 0.2 的 v4 格式**禁止** `source.kind="plugin"` | 注入消息改用生产者名 |
+| 🟠 续聊炸 | `session.events` 读不到 | 变成私有，公开 `snapshotEvents()` | 兼容层 |
+| 🟠 续聊炸 | 会话「已存在」却 create | `list()` 返回 `{header:{id}}`，代码读 `.id` 得 undefined | 兼容读字段 |
+| 🟡 功能退化 | 图片/文件消息失败 | `saveImage/readImage` → `saveImages/readImageRequest` | 兼容封装 |
+| 🟡 功能退化 | 无法读取会话头 | `sessionPersistence.inspect()` 被删除 | 「有则用，无则默认」 |
+| 🟢 加载失败 | 通道插件 import 失败 | `@deepseek-ai/dsh-agent-presets` 被移除 | `compat/` 垫片 |
+
+### 排查方法论（省时间的关键）
+
+1. **先给插件的兜底 catch 加 `error.stack` 日志**——默认它只回一句「请稍后重试」，什么都看不到
+2. **进程内自检**：给插件加个环境变量开关，用伪造的入站消息直接跑 `executeCommand`，
+   一条命令就能复现「用户发消息」的全链路，不用真在微信里来回试
+3. **写路径 vs 读路径**：报错在 `appendLines` 说明是**写入**校验（格式问题），
+   在 `read`/`list` 说明是**读取**兼容问题——两者的修法完全不同
+4. 改完跑 `node --check` + 自检回归，再上真机
