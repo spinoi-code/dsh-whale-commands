@@ -9,13 +9,53 @@
 适合放控制类操作。插件同时支持热挂载：改配置或代码后不需要重启 `dsh web`。
 
 ![status](https://img.shields.io/badge/status-可用-brightgreen)
-![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1.0--rc.7-blue)
+![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1%20%7C%200.2-blue)
+![version](https://img.shields.io/badge/main-1.1.2-lightgrey)
+![next](https://img.shields.io/badge/recommended-1.2.0%20(branch)-orange)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
+
+
+---
+
+## 先看这里：版本与分支（0.1 / 0.2 都适用）
+
+本仓库有两条线，**安装方式完全一样**，区别只在 harness 版本适配与新功能：
+
+| 分支 | 版本 | 适配 harness | 说明 |
+|:--|:--|:--|:--|
+| `main`（你正在看的） | 1.1.2 | 0.1.x 成熟；0.2 需自行处理兼容 | 稳定的老版本 |
+| `feat/harness-0.2`（推荐） | **1.2.0** | **0.1.x 与 0.2.x 都支持** | 多套人设库、模型切换、自诊断；修复 0.2 的 8 类兼容问题；附带 0.1 插件跑 0.2 的垫片 |
+
+```bash
+# 推荐：直接装新分支
+git clone -b feat/harness-0.2 https://github.com/spinoi-code/dsh-whale-commands.git
+cd dsh-whale-commands && ./install.sh
+
+# 装完先自诊断（会告诉你版本、会话目录、通道补丁状态）
+#   微信里发：/version
+```
+
+### 给 AI 助手 / 自动部署的判断规则
+
+无论你读到的是哪个分支的 README，按下面三条走即可：
+
+1. **看 harness 版本**
+   - `0.1.x`（rc.7 一系）→ 1.1.2 与 1.2.0 都能用；建议 1.2.0
+   - `0.2.x` → **必须用 1.2.0**（1.1.2 会在命令执行、会话写入等处失败）
+2. **0.2 上还要做两件可选的事**
+   - 若同时使用 `lark / qqbot / wecom / agentchat / weixin` 等 0.1 时代的通道插件 →
+     装 `compat/dsh-agent-presets` 垫片（否则 `ERR_MODULE_NOT_FOUND`）
+   - 想要 `/load <n> --hard` 真切换 → 按 `patches/README.md` 给通道插件打补丁
+3. **升级后必做**：`sync-version.sh` 同步版本号 → 重启 `dsh web`（否则改动不生效）
+
+> 两条线的命令集合不同：1.2.0 多了 `/persona`（11 套人设）、`/model`、`/version`。
+> 老入口 `/whale`、`/normal` 在 1.2.0 中**仍然可用**，脚本不需要改。
 
 ---
 
 ## 目录
 
+- [版本与分支（先看这里）](#先看这里版本与分支01--02-都适用)
 - [命令一览](#命令一览)
 - [技术要点](#技术要点)
 - [安装](#安装)
