@@ -35,6 +35,15 @@ cd dsh-whale-commands && ./install.sh
 #   微信里发：/version
 ```
 
+### 兼容性修复清单（在新分支里）
+
+`feat/harness-0.2` 修复了 **`deepseek-harness-weixin`（微信通道插件）在 harness 0.2 上的 15 项兼容问题**
+（`commands.execute` 变 4 参、`agentCtx.agent` 需 inject、`session.events` 私有化、
+`source.kind="plugin"` 被 v4 拒绝等），并提供垫片让 **`lark` / `qqbot` / `wecom` / `agentchat`**
+等 0.1 时代的通道插件在 0.2 上加载。完整 15 项清单：
+
+https://github.com/spinoi-code/dsh-whale-commands/blob/feat/harness-0.2/docs/COMPATIBILITY.md
+
 ### 给 AI 助手 / 自动部署的判断规则
 
 无论你读到的是哪个分支的 README，按下面三条走即可：
