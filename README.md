@@ -28,6 +28,7 @@
 
 ## 目录
 
+- [兼容性工程](#兼容性工程让-01-时代的插件跑在-02-上)
 - [命令一览](#命令一览)
 - [兼容性（0.1 / 0.2）](#兼容性harness-01-与-02)
 - [从 0.1 升级到 0.2](#从-01-升到-02-需要注意)
@@ -61,6 +62,43 @@
 `auto`（跟随当前人设，默认）/ `random`（11 套人设全员随机）/ `<人设id>` 固定一个。
 
 ---
+
+---
+
+## 兼容性工程：让 0.1 时代的插件跑在 0.2 上
+
+harness 0.2 动了底层的接口与格式，**不是插件作者能"顺手适配"的那种小改**。这次一共处理了 8 类差异：
+
+| # | 0.1 的写法 | 0.2 的变化 | 后果 |
+|:--|:--|:--|:--|
+| 1 | `commands.execute(agent, line, signal)` | 变成 **4 个参数**（多 `submittedAttachments`） | 所有命令直接报错 |
+| 2 | `agentCtx.agent` 直接读 | 需要 **inject 声明**才能访问 | 通道初始化失败 |
+| 3 | 附件参数可省略 | 传 `undefined` 会读 `.length` 抛错 | 命令执行中断 |
+| 4 | `sessionPersistence.inspect()` | **接口被删除**（只剩 open/list/stat） | 续聊/切换失败 |
+| 5 | `session.events` 数组 | 改为私有，公开 `snapshotEvents()` | 读不到历史 |
+| 6 | `list()` 返回 `{id}` | 改成 `{header:{id}}` | 会话被当成"不存在"→ 重复创建 |
+| 7 | `attachments.saveImage/readImage` | 改名 `saveImages/readImageRequest` | 图片/文件消息失败 |
+| 8 | 消息 `source.kind = "plugin"` | **v4 会话格式明令拒绝** | 只有写会话时才炸，最难发现 |
+
+### 两个可复用的成果
+
+1. **`compat/dsh-agent-presets` 垫片**
+   0.2 移除了这个包，但一批 0.1 时代的通道插件（`lark` / `qqbot` / `wecom` / `agentchat` / `weixin`）
+   仍从它导入 `resolveSessionPreset` → 加载即报 `ERR_MODULE_NOT_FOUND`。
+   垫片按 0.1 语义补回该函数，放进 profile 的 `node_modules` 即可让这些插件**在 0.2 上通过模块加载**。
+
+2. **`patches/weixin-harness-0.2.diff`**
+   把上述差异整理成可验证的统一 diff（实测 `patch -p0` 应用后 `node --check` 通过），
+   并附带 8 条的逐项说明与排查方法。
+
+### 排查方法论（比补丁更值钱）
+
+- **先让插件的兜底 catch 吐出 `error.stack`** —— 它默认只回一句"请稍后重试"，什么都看不到
+- **进程内自检**：给插件加一个环境变量开关，用**伪造的入站消息**直接跑完整命令链路，
+  一条命令复现"用户发消息"的场景，不用真在微信里反复试（本项目用它跑通了 `/help`、`/sessions`、续聊、切换）
+- **分清读路径与写路径**：报错在 `appendLines` 说明是**写入校验**（格式问题），在 `read/list` 说明是**读取兼容**问题——两者修法完全不同
+
+> 最终结果：8 条微信命令自检全过、7 项能力验收全过，且**同一份代码在 0.1 与 0.2 上都能跑**。
 
 ## 技术要点
 
