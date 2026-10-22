@@ -1,5 +1,7 @@
 # harness 0.1 → 0.2：通道插件适配补丁
 
+> 完整差异清单（15 项，含稳定性修复与排查方法论）见 [`docs/COMPATIBILITY.md`](../docs/COMPATIBILITY.md)。
+
 本目录记录把 **0.1 时代**的微信通道插件（`deepseek-harness-weixin@0.2.5`，MIT）跑到 **harness 0.2** 上的全部差异。
 `weixin-harness-0.2.diff` 是相对 npm 原版 `dist/index.js` 的统一 diff，可直接 `patch -p0`。
 

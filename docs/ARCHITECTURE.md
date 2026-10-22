@@ -96,16 +96,30 @@ index.mjs  --import('./impl.mjs?v=1.0.0+687c4e82')-->  impl.mjs
 
 ---
 
-## 七、为什么不做真正的会话切换
+## 七、真会话切换怎么做（1.2.0 起支持）
 
-微信通道的当前会话 id 存在 `Conversations` 类的 `private readonly activeIds` 里，该类**未导出**，
-映射一旦写入就被缓存（`activeIdFor` 第一行就是读缓存），外部既读不到也改不了。
-磁盘层面的 hack 全部无效，因为缓存已经存在。
+**结论先放**：0.1 时代确实做不到；**1.2.0 通过「通道插件补丁 + 请求文件」做到了**，但默认仍不启用。
 
-唯一可行路径是复制整个微信插件、打补丁、让它重挂。**风险**：重挂会中断长轮询，
-若补丁有问题，**用户就再也联系不上机器人** —— 连报错都发不出去。风险收益比不合适。
+### 难点在哪
 
-替代：`/load` 把旧对话最近内容注入当前会话，达到「接续话题」的实际效果。
+当前微信会话 id 存在通道插件 `ConversationManager` 的 `private activeIds` 里。该类未导出、
+映射一旦写入就读缓存，外部读不到也改不了；磁盘层的 hack 无效，因为缓存已存在。
+所以「真切换」只能在通道插件内部实现。
+
+### 1.2.0 的做法
+
+1. `/load <n> --hard` 只做一件事：把 `{targetId}` 写进 `$DSH_HOME/.whale-commands/pending-switch.json`（0600）
+2. 通道插件在**命令执行完成后**读取该文件并执行切换：取消当前工作 → 释放绑定 →
+   `activeIds.set(baseId, targetId)` → `resume(target)`（失败自动回滚到原会话）
+3. 没打补丁的通道：命令直接拒绝并提示「通道未打补丁」，**默认的 `/load <n>`（注入上下文）照常可用**
+
+### 风险控制
+
+- 补丁只在**命令结束后**触发切换，不打断长轮询；切换失败会回滚
+- 切换目标若已绑定 → 视为成功（幂等），避免抢写锁
+- 默认行为仍是「注入上下文」，老用户零感知；真切换是显式 opt-in
+
+> 详见 [`COMPATIBILITY.md`](COMPATIBILITY.md) 与 `patches/weixin-harness-0.2.diff`。
 
 ---
 
@@ -330,3 +344,5 @@ README 写了 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_US
 3. **写路径 vs 读路径**：报错在 `appendLines` 说明是**写入**校验（格式问题），
    在 `read`/`list` 说明是**读取**兼容问题——两者的修法完全不同
 4. 改完跑 `node --check` + 自检回归，再上真机
+
+> 0.1 → 0.2 的完整兼容清单见 [`COMPATIBILITY.md`](COMPATIBILITY.md)。
