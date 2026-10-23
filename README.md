@@ -8,6 +8,11 @@
 **命令由宿主进程直接执行，不经过模型** —— 不消耗 token、结果确定、响应即时。
 插件支持热挂载：改配置或代码后不需要重启 `dsh web`。
 
+> **微信那个通道插件（`deepseek-harness-weixin`）原本跑不了 harness 0.2，我们把它修好了**：
+> 0.1 改到 0.2 时一批 API 换了写法，我们给这个通道插件重写了会话读取与命令执行，
+> 补了 **8 类 API 适配 + 7 项稳定性修复**，还做了个垫片让 `lark` / `qqbot` / `wecom` 这些老通道插件也能在新版上加载。
+> 本插件本身两边通吃，0.1.x / 0.2.x 装哪边都行 → [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
+
 ![status](https://img.shields.io/badge/status-可用-brightgreen)
 ![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1%20%7C%200.2-blue)
 ![version](https://img.shields.io/badge/version-1.2.0-orange)
