@@ -29,10 +29,23 @@
 
 ## 快速开始
 
+> ⚠️ **先装微信通道插件，再装本插件。**
+> 本插件是「微信通道的扩展命令」——它只负责在微信里提供斜杠命令，
+> 聊天收发本身由通道插件 `deepseek-harness-weixin` 负责。
+> **漏装通道插件不会让 dsh 崩**，但你会看到「装好了却什么都不能用」：
+> `/sessions` 说没有对话、人设也没对象可注入。
+>
+> ```bash
+> # 顺序参考：先通道，后本插件
+> dsh plugin --profile web add deepseek-harness-weixin
+> dsh plugin --profile web add dsh-whale-commands
+> ```
+> 装完重启一次 `dsh web`，并用微信给机器人发一句话（有入站消息才会建会话）。
+
 一条命令，装完即挂载（本包已声明 `dsh.bundle`，不需要再手改 profile）：
 
 ```bash
-dsh plugin --profile web add github:spinoi-code/dsh-whale-commands
+dsh plugin --profile web add dsh-whale-commands
 ```
 
 如果还想顺带装好「早间问候脚本 + 自检」，用仓库里的安装脚本（两种方式**二选一**，别同时用）：

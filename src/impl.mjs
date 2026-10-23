@@ -68,6 +68,16 @@ const SESSION_PREFIX = process.env.DSH_WHALE_SESSION_PREFIX?.trim() || "weixin-"
 const ZSTD_BIN = process.env.DSH_WHALE_ZSTD?.trim() || "/usr/bin/zstd";
 /** 余额查询接口. */
 const BALANCE_URL = process.env.DSH_BALANCE_URL?.trim() || "https://api.deepseek.com/user/balance";
+/** 微信通道插件是否在本机跑过（它会在 DSH_HOME/weixin 下留状态文件）。
+ *  只用于给出人话提示：漏装通道插件时，本插件不会崩，但所有命令都会空转。 */
+function weixinChannelPresent() {
+  try {
+    return existsSync(`${DSH_HOME}/weixin`);
+  } catch {
+    return false;
+  }
+}
+
 /** 会话根目录；测试时可用 WHALE_SESSIONS_ROOT 指向临时目录。 */
 const SESSIONS_ROOT = process.env.WHALE_SESSIONS_ROOT || `${DSH_HOME}/sessions`;
 /** 微信插件给每条入站消息前置的固定说明，做预览时要跳过。 */
@@ -1056,7 +1066,16 @@ export function apply(ctx, _config) {
         return { kind: "error", text: `读取会话失败：${String(error?.message ?? error)}` };
       }
       if (sessions.length === 0) {
-        return { kind: "success", text: "没有找到任何微信对话记录。" };
+        const hasChannel = weixinChannelPresent();
+        return {
+          kind: "success",
+          text: hasChannel
+            ? "还没有微信对话记录。用微信给机器人发一句话，会话就会建出来。"
+            : "没有找到任何微信对话记录，而且看起来**微信通道插件还没装**。\n\n" +
+              "本插件只提供斜杠命令，消息收发靠通道插件：\n" +
+              "  dsh plugin --profile web add deepseek-harness-weixin\n" +
+              "装完重启一次 dsh web，再用微信给机器人发一句话。",
+        };
       }
       const currentId = String(agent?.id ?? "");
       const top = sessions.slice(0, 5);
@@ -1167,6 +1186,7 @@ export function apply(ctx, _config) {
         "",
         `人物设状态：${activePersona() ? activePersona().name : "off"}`,
         `会话目录：${SESSIONS_ROOT}`,
+        `微信通道：${weixinChannelPresent() ? "✅ 已就绪" : "❌ 未检测到（先装 deepseek-harness-weixin）"}`,
         `真切换（/load --hard）：${hard ? "✅ 通道已打补丁" : "❌ 通道未打补丁（用默认 /load 注入上下文）"}`,
       ];
       return { kind: "success", text: lines.join("\n") };
