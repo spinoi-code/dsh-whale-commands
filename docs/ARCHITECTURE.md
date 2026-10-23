@@ -346,3 +346,20 @@ README 写了 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_US
 4. 改完跑 `node --check` + 自检回归，再上真机
 
 > 0.1 → 0.2 的完整兼容清单见 [`COMPATIBILITY.md`](COMPATIBILITY.md)。
+
+## 技术要点速览
+
+实现过程中处理了几个 Harness 里不太直观的机制，如果你也在写 DSH 插件，这几点可以直接参考：
+
+1. **不重启就能加命令** —— 命令注册表运行时可增，微信桥会派发任何已注册命令；改 `cordis.patch.yml` 会被 Cordis HMR 热加载。
+2. **人设跨 `/new`** —— 监听 `agent/created`，新会话自动继承。
+3. **注入但不打扰** —— 用 `agent.inject()` 而不是 `followup()`：只把上下文排进下一步，不凭空多开一轮对话。
+4. **机器人能主动找你** —— iLink 的 `context_token` 是可选字段，所以没有入站消息也能推送。
+5. **重挂不会把命令弄丢** —— 进程级注册去重 + 自愈重试（这条是踩坑踩出来的）。
+6. **版本号与内容强绑定** —— 内容哈希写进 `config.version`，杜绝「改了代码但没生效」。
+7. **同一份代码跨 harness 版本** —— 用运行时探测（`commands.execute.length`、服务方法存在性）代替版本判断，`/version` 会把结果告诉你。
+8. **`/help` 按宿主注册表自动分组** —— 命令表越大越长，所以 `/help` 只出目录（按用途分组），`/help <group>` 进子菜单，`/help all` 一次列全。
+
+---
+
+← 返回 [README](../README.md)

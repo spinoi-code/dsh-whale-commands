@@ -72,3 +72,39 @@ harness 0.2 动了底层的接口与格式，**不是插件作者能"顺手适�
 - 影子实例 systemd 常驻 + 开机自启；状态目录与生产隔离
 
 > 最终结果：8 条微信命令自检全过、7 项能力验收全过，且**同一份代码在 0.1 与 0.2 上都能跑**。
+
+## 一份代码支持两个 harness 版本
+
+本插件**同一份代码同时支持 0.1 与 0.2**，唯一差别在「真切换会话」这一项要用通道补丁：
+
+| harness | 插件本体 | 通道补丁 | `/load <n>` | `/load <n> --hard` |
+|---|---|---|---|---|
+| 0.1.x（rc.7） | ✅ 直接可用 | 可选 | 注入上下文 | 打补丁后可用 |
+| 0.2.x | ✅ 直接可用 | **建议打** | 注入上下文 | 打补丁后可用 |
+
+发 `/version` 可自诊断：会告诉你当前通道是否已打「真切换」补丁。
+
+## 兼容垫片与通道补丁
+
+0.2 移除了 `@deepseek-ai/dsh-agent-presets` 包，导致一批为 0.1 写的通道插件
+（`lark` / `qqbot` / `wecom` / `agentchat` / `weixin`）在 0.2 上 `ERR_MODULE_NOT_FOUND`。
+仓库提供两样东西：
+
+1. **兼容垫片** `compat/dsh-agent-presets/`：补回插件仍在用的 `resolveSessionPreset`，装进 profile 的 `node_modules` 即可
+2. **通道补丁** `patches/`：说明 0.2 与 0.1 的 8 处 API/格式差异，并给出可直接套用的补丁
+
+> 补丁作用于第三方插件 `deepseek-harness-weixin`（MIT），请遵守其许可证并在你自己部署内使用。
+
+## 运行环境与已知限制
+
+- 在 **DeepSeek Harness `0.1.0-rc.7`** + **deepseek-harness-weixin `0.2.5`** 上验证通过；0.2.x 分支同样验证过
+- 依赖 Harness 的 internal API（`ctx.commands.register`、`agent.inject`、`agent/created`），跨大版本可能需要适配
+- **命令是全局注册的**，所以 Web GUI 里也能看到这些命令入口；但
+  `/whale`、`/normal`、`/sessions`、`/load`、`/style`、`/token`、`/persona`、`/model` 读的是**微信会话数据**，
+  在非微信会话（如 Web GUI）会直接返回「只在微信通道可用」，避免跨通道读取。
+  `/time`、`/help`、`/version` 与通道无关，任何通道都能用
+- 人设自动继承（`agent/created`）按 `weixin-` 前缀过滤，只对微信会话生效
+
+---
+
+← 返回 [README](../README.md)
