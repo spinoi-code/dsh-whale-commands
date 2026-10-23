@@ -1,0 +1,15 @@
+# dsh-whale-commands 作为 DSH 插件包（bundle）的挂载声明
+#
+# 用途：让 `dsh plugin --profile web add dsh-whale-commands` 装完之后能自动挂载，
+# 不需要再手改 profile 的 cordis.patch.yml。
+#
+# 官方范本：deepseek-harness-weixin 的 cordis.patch.yml 也是这样用包名声明。
+#
+# ⚠️ 如果已经用 install.sh 装过（那种方式把插件拷到 profiles/web/plugins/whale-commands/
+#    并在 profile 的 cordis.patch.yml 里写了一段相对路径 insert），**不要再用本包安装**，
+#    否则同一个 id 会注册两次导致命令重复。两种方式二选一。
+- insert:
+    - id: whale-commands
+      name: dsh-whale-commands
+      config:
+        version: '1.2.1'
