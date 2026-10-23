@@ -542,9 +542,21 @@ function readPriceCache() {
 
 function savePriceCache(prices) {
   try {
+    // 拟合出来的是浮点长尾巴（0.040523162364590526），落盘前收窄到 6 位有效数字，
+    // 免得缓存文件本身和「回退显示」时都难看
+    const tidy = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n === 0) return v;
+      return Number(n.toPrecision(6));
+    };
+    const clean = {};
+    for (const [model, p] of Object.entries(prices ?? {})) {
+      clean[model] =
+        p && typeof p === "object" ? { hit: tidy(p.hit), miss: tidy(p.miss), out: tidy(p.out) } : p;
+    }
     writeFileSync(
       PRICE_CACHE_FILE,
-      JSON.stringify({ prices, updatedAt: new Date().toISOString() }, null, 1),
+      JSON.stringify({ prices: clean, updatedAt: new Date().toISOString() }, null, 1),
       "utf8",
     );
   } catch {
@@ -1276,6 +1288,16 @@ export function apply(ctx, _config) {
         cachedPrices?.["deepseek-flash"] ??
         DEFAULT_UNIT_PRICES["deepseek-flash"];
       const yuan = (value) => `¥${value.toFixed(value < 0.01 ? 4 : 2)}`;
+      /** 单价显示（元/百万 token）：最多 4 位有效小数。
+       *  拟合/缓存来的价格常带浮点尾巴（0.040523162364590526），原样显示没法看。 */
+      const priceText = (value) => {
+        const n = Number(value ?? 0);
+        if (!Number.isFinite(n) || n === 0) return "0";
+        if (n >= 100) return n.toFixed(2);
+        if (n >= 1) return String(Number(n.toFixed(3)));
+        if (n >= 0.01) return String(Number(n.toFixed(4)));
+        return String(Number(n.toPrecision(3)));
+      };
       /** 本地 usage（新增/缓存/输出）按官方 flash 单价折算成人民币。 */
       const cnyOfLocal = (usage) =>
         (usage.cacheRead * flashPrice.hit + usage.input * flashPrice.miss + usage.output * flashPrice.out) / 1e6;
@@ -1315,7 +1337,7 @@ export function apply(ctx, _config) {
         lines.push(`  输出 ${fmtNumber(official.out)} · 合计 ${fmtNumber(totalInput + official.out)}`);
         lines.push(`  花费 ¥${official.cny.toFixed(2)}（官方账单）`);
         lines.push(
-          `  官方单价：缓存 ¥${flashPrice.hit}/M · 新增 ¥${flashPrice.miss}/M · 输出 ¥${flashPrice.out}/M`,
+          `  官方单价：缓存 ¥${priceText(flashPrice.hit)}/M · 新增 ¥${priceText(flashPrice.miss)}/M · 输出 ¥${priceText(flashPrice.out)}/M`,
         );
       } else {
         // 回退：本地「今日累计」（所有微信会话），花费按官方单价估算
