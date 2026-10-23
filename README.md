@@ -20,14 +20,15 @@
 
 ---
 
-## 先看这里：版本与分支（0.1 / 0.2 都适用）
+## 先看这里：版本与 harness 兼容性
 
-**`main` 就是 1.2.0**，`0.1.x` 与 `0.2.x` 两种 harness 都能用（原 `feat/harness-0.2` 已合并进 main）。
+本仓库**只有一条线：`main` = v1.2.0**（原开发分支 `feat/harness-0.2` 已并入 main 并删除）。
 
-| 分支 | 版本 | 适配 harness | 说明 |
-|:--|:--|:--|:--|
-| `main`（推荐） | **1.2.0** | **0.1.x 与 0.2.x 都支持** | 多套人设库、模型切换、自诊断；修复 0.2 的 8 类兼容问题；附带 0.1 插件跑 0.2 的垫片 |
-| `feat/harness-0.2` | 1.2.0 | 同上 | 开发分支，内容与 main 一致，留作历史 |
+| 版本 | 适配 harness | 说明 |
+|:--|:--|:--|
+| **1.2.0（main）** | **0.1.x 与 0.2.x 都支持** | 多套人设库、模型切换、自诊断；修复 0.2 的 8 类兼容问题；附带让 0.1 插件跑在 0.2 的垫片 |
+
+> 更早的 1.1.2 只支持 0.1.x（0.2 上会在命令执行、会话写入等处失败），已不再维护。
 
 ```bash
 git clone https://github.com/spinoi-code/dsh-whale-commands.git
@@ -37,43 +38,40 @@ cd dsh-whale-commands && ./install.sh
 #   微信里发：/version
 ```
 
-### 兼容性修复清单（在新分支里）
+### 0.2 兼容性修复清单
 
-`feat/harness-0.2` 修复了 **`deepseek-harness-weixin`（微信通道插件）在 harness 0.2 上的 15 项兼容问题**
+v1.2.0 修复了 **`deepseek-harness-weixin`（微信通道插件）在 harness 0.2 上的 15 项兼容问题**
 （`commands.execute` 变 4 参、`agentCtx.agent` 需 inject、`session.events` 私有化、
 `source.kind="plugin"` 被 v4 拒绝等），并提供垫片让 **`lark` / `qqbot` / `wecom` / `agentchat`**
 等 0.1 时代的通道插件在 0.2 上加载。完整 15 项清单：
 
-https://github.com/spinoi-code/dsh-whale-commands/blob/feat/harness-0.2/docs/COMPATIBILITY.md
+https://github.com/spinoi-code/dsh-whale-commands/blob/main/docs/COMPATIBILITY.md
 
 ### 给 AI 助手 / 自动部署的判断规则
 
-无论你读到的是哪个分支的 README，按下面三条走即可：
+按下面三条判断即可：
 
 1. **看 harness 版本**
-   - `0.1.x`（rc.7 一系）→ 1.1.2 与 1.2.0 都能用；建议 1.2.0
-   - `0.2.x` → **必须用 1.2.0**（1.1.2 会在命令执行、会话写入等处失败）
+   - `0.1.x`（rc.7 一系）→ 用 v1.2.0（已实测）
+   - `0.2.x` → 用 v1.2.0（1.1.x 会在命令执行、会话写入等处失败，且已不再维护）
 2. **0.2 上还要做两件可选的事**
    - 若同时使用 `lark / qqbot / wecom / agentchat / weixin` 等 0.1 时代的通道插件 →
      装 `compat/dsh-agent-presets` 垫片（否则 `ERR_MODULE_NOT_FOUND`）
    - 想要 `/load <n> --hard` 真切换 → 按 `patches/README.md` 给通道插件打补丁
 3. **升级后必做**：`sync-version.sh` 同步版本号 → 重启 `dsh web`（否则改动不生效）
 
-> 两条线的命令集合不同：1.2.0 多了 `/persona`（11 套人设）、`/model`、`/version`。
-> 老入口 `/whale`、`/normal` 在 1.2.0 中**仍然可用**，脚本不需要改。
+> 从 1.1.x 升上来的话：1.2.0 新增 `/persona`（11 套人设）、`/model`、`/version`；
+> 老入口 `/whale`、`/normal` **仍然可用**，已有脚本不用改。
 
 ---
 
-> **本 README 对应分支 `feat/harness-0.2`（v1.2.0，尚未合入 main）。**
-> 相比 main 的 1.1.2：新增 11 套人设库 / 模型切换 / 自诊断，并修复了 harness 0.2 的兼容问题；
-> 同时新增 `compat/` 与 `patches/`，让 0.1 时代的通道插件能跑在 0.2 上。
-> 合并前请跑一遍 `scripts/scan-secrets.sh` 与自检（见文末）。
+
 
 
 ## 目录
 
 - [兼容性修复（摘要）](#兼容性修复摘要)
-- [版本与分支（先看这里）](#先看这里版本与分支01--02-都适用)
+- [版本与 harness 兼容性（先看这里）](#先看这里版本与-harness-兼容性)
 - [命令一览](#命令一览)
 - [兼容性（0.1 / 0.2）](#兼容性harness-01-与-02)
 - [从 0.1 升级到 0.2](#从-01-升到-02-需要注意)
