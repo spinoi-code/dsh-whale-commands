@@ -29,19 +29,20 @@
 
 ## 快速开始
 
-```bash
-git clone https://github.com/spinoi-code/dsh-whale-commands.git
-cd dsh-whale-commands
-./install.sh                 # 装插件 + 挂载 + 问候脚本 + 自检
-```
-
-也可以在 clone 后用插件市场识别的那条命令装（还需一步手动挂载，见 [docs/INSTALL.md](docs/INSTALL.md)）：
+一条命令，装完即挂载（本包已声明 `dsh.bundle`，不需要再手改 profile）：
 
 ```bash
 dsh plugin --profile web add github:spinoi-code/dsh-whale-commands
 ```
 
-装完等几秒（Cordis HMR 自动挂载），在微信里依次发 `/version`、`/help`、`/persona` 确认。
+如果还想顺带装好「早间问候脚本 + 自检」，用仓库里的安装脚本（两种方式**二选一**，别同时用）：
+
+```bash
+git clone https://github.com/spinoi-code/dsh-whale-commands.git
+cd dsh-whale-commands && ./install.sh
+```
+
+装完重启一次 `dsh web`，在微信里依次发 `/version`、`/help`、`/persona` 确认。
 
 前置条件：已跑过 `dsh web`（会生成 `~/.dsh/profiles/web/`）、微信通道已配置、Node.js ≥ 22、
 `zstd` 可用（读会话历史需要）。

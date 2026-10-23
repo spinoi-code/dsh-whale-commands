@@ -1,6 +1,16 @@
 # 安装与升级
 
-> 最短路径在 README 的「快速开始」。这页讲细的：不同 harness 版本、定时问候、自定义路径、升级与更新。
+> 最短路径在 README 的「快速开始」。这页讲细的：两种安装方式的区别、不同 harness 版本、定时问候、自定义路径、升级与更新。
+
+## 两种安装方式，二选一
+
+| 方式 | 命令 | 装什么 | 适合谁 |
+|:--|:--|:--|:--|
+| **A. 插件包（推荐）** | `dsh plugin --profile web add github:spinoi-code/dsh-whale-commands` | 只装插件本体，靠包内 `cordis.patch.yml` **自动挂载** | 只想用命令功能 |
+| **B. 安装脚本** | `./install.sh` | 插件 + 把文件拷进 profile + 写挂载段 + 早间问候脚本 + 自检 | 想要定时问候、或想看清每一步做了什么 |
+
+⚠️ **别同时用**：两种方式都会注册 `whale-commands` 这个 loader id，一起上会报
+`duplicate loader entry id: whale-commands`，dsh 直接起不来。要换方式先 `./uninstall.sh` 再装。
 
 ### 装在哪一版 harness？（0.1 / 0.2 都行）
 
