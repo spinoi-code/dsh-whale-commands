@@ -45,7 +45,7 @@ cd dsh-whale-commands && git pull
 sudo systemctl restart deepseek-harness      # 或重启你自己的 dsh web
 ```
 
-> 版本号规则：`1.2.0+<内容哈希>`。哈希由脚本算，**不要手改**。
+> 版本号规则：`<语义版本>+<内容哈希>`（当前 1.4.x）。哈希由脚本算，**不要手改**。
 
 ### 从 0.1 升到 0.2 需要注意
 
@@ -85,8 +85,8 @@ DSH_HOME=/path/to/.dsh ./install.sh
 按下面三条判断即可：
 
 1. **看 harness 版本**
-   - `0.1.x`（rc.7 一系）→ 用 v1.2.0（已实测）
-   - `0.2.x` → 用 v1.2.0（1.1.x 会在命令执行、会话写入等处失败，且已不再维护）
+   - `0.1.x`（rc.7 一系）→ 用当前版（1.4.x，已实测）
+   - `0.2.x` → 用当前版（1.1.x 及更早会在命令执行、会话写入等处失败，已不再维护）
 2. **0.2 上还要做两件可选的事**
    - 若同时使用 `lark / qqbot / wecom / agentchat / weixin` 等 0.1 时代的通道插件 →
      装 `compat/dsh-agent-presets` 垫片（否则 `ERR_MODULE_NOT_FOUND`）

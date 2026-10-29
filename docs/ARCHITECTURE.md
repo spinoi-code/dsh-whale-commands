@@ -55,7 +55,7 @@ await watchUserPatches(ctx, { filename: profilePatchPath });
 **解法**：入口稳定 + 实现用 `?v=<version>` 查询串导入。Node 把带不同查询串的同一文件视为**不同模块实例**。
 
 ```
-index.mjs  --import('./impl.mjs?v=1.0.0+687c4e82')-->  impl.mjs
+index.mjs  --import('./impl.mjs?v=1.4.0+a1b2c3d4')-->  impl.mjs
 ```
 
 版本号变化即触发重新 import。而版本号的「哈希后缀」由 `sync-version.sh` 自动从代码内容算出 —— **「忘了升版本」这件事从流程上被消除**。
@@ -363,3 +363,27 @@ README 写了 `DSH_WEIXIN_CRED_FILE` / `DSH_WEIXIN_CRED_KEY` / `DSH_WEIXIN_TO_US
 ---
 
 ← 返回 [README](../README.md)
+## 十五、深度调研搜索的协作模型（1.3.0）
+
+`/search` 把「一句话」变成「一篇事实概述」，靠三段协作，不是一遍 prompt：
+
+```
+规划（模型）  判时效窗口 + 生成 4~6 条中英查询 → JSON
+   ↓
+执行（插件）  并行 ctx.web.search，全部在自己这层完成——不让模型编 URL
+   ↓
+深挖（模型）  从第一轮标题里抽 2~3 个实体关键词 → 再搜一层（层数写死 2，无递归）
+   ↓
+补充（插件）  挑 3~4 篇 ctx.web.fetch 抓正文，抽要点
+   ↓
+成稿（模型）  只做消化：禁止转述语气、禁止点评资料本身、禁止编造
+```
+
+几个关键决定：
+
+- **时效先判**：规划阶段就输出 `timeframe`，后面用 `relaxWindow()` 按 `1d→3d→7d→30d` 逐级放宽找够 3 条的一档——纯本地筛选，不重新搜索。
+- **概述与来源同源**：过滤后只有一份 `all`，概述用它、参考来源也用它，杜绝「概述用新的、链接列旧的」。
+- **`reasoningEffort: "off"`**：模型调用关掉推理，否则 effort=max 时推理会吃光输出预算，只剩空文本。
+- **微信是纯文本**：`plainText()` 在返回前剥掉 markdown 记号（模型很爱写 `**加粗**` 和 `# 标题`）。
+- **消息手写要合规**：v4 会话格式禁止 `source.kind="plugin"`，必须用 `createUserMessage` + 生产者名。
+

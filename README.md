@@ -15,7 +15,7 @@
 
 ![status](https://img.shields.io/badge/status-可用-brightgreen)
 ![dsh](https://img.shields.io/badge/DeepSeek%20Harness-0.1%20%7C%200.2-blue)
-![version](https://img.shields.io/badge/version-1.2.0-orange)
+![version](https://img.shields.io/badge/version-1.4.0-orange)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
 ## 特性
@@ -85,7 +85,9 @@ cd dsh-whale-commands && ./install.sh
 
 ## 人设与定时问候
 
-人设库共 **11 套**（鲸鱼娘、女仆、机娘、魔女、古风王爷……），`/persona` 里可以看全表。
+人设库共 **11 套**：鲸鱼娘·大肥鱼、甜系女仆·砂糖、无口机娘·零式、中二魔女·夜露、高冷女王·西芙、
+温柔姐姐·柚子、古风剑仙·无霜、银发执事·阿文、元气少女·小葵、毒舌顾问·凉生、耐心教师·白鹭。
+`/persona` 里可以看全表。
 早间问候的文案就写在每个人设里，口吻自动跟随；想让每天不重样，用 `/style random`。
 
 > `/whale` 和 `/normal` 是**为纪念保留**的原始入口：插件最早只有「鲸鱼娘开关」这一个功能，
