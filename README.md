@@ -25,6 +25,7 @@
 - **用量与余额** —— `/token` 看本会话 token、官方花费与账户余额（不绑令牌也能用本地统计）
 - **定时问候** —— 每天早上推一条「请安 + 鼓励」，口吻跟随当前人设，或按 `/style` 指定
 - **深度调研搜索** —— `/search <kw>`：多轮查询 + 抓正文 + 会话模型写成事实概述；`deep` 让模型先判时效、规划中英查询、再从结果里挖关键词补搜一层（最多 2 层）
+- **临时下载链接** —— `/share <文件>`：限时 + 令牌的 HTTPS 直链，绕开微信 30MB 上限；到期/用尽自动失效，令牌 256 位随机不可枚举
 - **一份代码两个 harness** —— 0.1.x 与 0.2.x 通用，附 0.2 兼容补丁与垫片
 - **零 token 成本** —— 命令走宿主注册表，不额外调模型
 
@@ -75,6 +76,7 @@ cd dsh-whale-commands && ./install.sh
 | `/token` | 本会话用量 + 今日累计 + 账户余额 |
 | `/style [auto\|random\|imperial\|<人设id>]` | 早间问候风格 |
 | `/search <kw> [deep\|brief\|en]` | **深度调研搜索**：多轮查询 + 抓正文 + 事实概述；`deep` 超深度（判时效 + 中英规划 + 2 层搜索）、`brief` 只要资料、`en` 英文源 |
+| `/share <文件> [分钟] [次数]` | **临时下载链接**：限时 + 令牌，绕开微信 30MB；`list` / `stop` / `status` 子命令 |
 | `/version` | 插件版本 + 通道补丁自诊断 |
 | `/time` | 当前服务器时间 |
 | `/help [组\|all]` | 分组菜单（talk / model / role / ext / harness） |
@@ -108,6 +110,7 @@ cd dsh-whale-commands && ./install.sh
 | [docs/COMMANDS.md](docs/COMMANDS.md) | 每条命令的用法、输出与限制 |
 | [docs/PERSONAS.md](docs/PERSONAS.md) | 人设库与 `/whale` 纪念入口 |
 | [docs/GREETINGS.md](docs/GREETINGS.md) | 定时问候：文案来源、`/style`、本地预览 |
+| [docs/SHARE.md](docs/SHARE.md) | `/share` 安装、Caddy/Nginx 配置、安全模型、排障 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | 0.1 ↔ 0.2 兼容清单、垫片与通道补丁 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 实现原理与踩坑记录（写给插件作者） |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | 改代码后必做的那一步、提交前自检 |

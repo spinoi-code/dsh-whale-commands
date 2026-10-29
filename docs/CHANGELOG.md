@@ -1,5 +1,15 @@
 # 变更记录
 
+## 1.4.0
+
+- **`/share` 临时下载链接**：限时 + 令牌的 HTTPS 直链，绕开微信 30MB 单文件上限。
+  - 新增独立工具 `tools/share-file.mjs`（零依赖）：`add / list / stop / status / daemon`
+  - 令牌 `randomBytes(32)`（256 位），与路径/内容/时间零关联，不可枚举、不可反推
+  - 默认 30 分钟过期 + 3 次下载上限，到期/用尽自动删除
+  - daemon 只监听 `127.0.0.1`，对外走你自己的 HTTPS 反代；访问日志不记令牌
+  - 全程环境变量配置：`SHARE_PUBLIC_BASE` / `SHARE_PORT` / `SHARE_STATE_DIR` / `DSH_HOME`
+  - 文档：`docs/SHARE.md`（含 Caddy / Nginx 配置与安全模型）
+
 ## 1.3.0
 
 - **`/search` 深度调研搜索**（本轮核心）：多轮查询 + 抓正文 + 会话模型写成事实概述。

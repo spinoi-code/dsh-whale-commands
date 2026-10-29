@@ -66,6 +66,20 @@
 
 真切换的实现原理与风险控制见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#七真会话切换怎么做120-起支持)。
 
+## 临时下载链接
+
+```
+/share <文件>              分享（默认 30 分钟 / 3 次）
+/share <文件> 120 5        自定义：120 分钟 / 5 次
+/share list                看进行中的分享
+/share stop <id|all>       立刻失效
+/share status              服务状态
+```
+
+链接形如 `https://<你的域名>/s/<令牌>/<文件名>`。令牌 256 位随机，猜不到；到期或用尽即失效。
+对外前缀由 `SHARE_PUBLIC_BASE` 决定，不配则只有本机能打开。
+安装、Caddy/Nginx 配置与排障 → [SHARE.md](SHARE.md)
+
 ## 从菜单里隐藏别的插件的命令
 
 ### 从菜单里隐藏别的插件的命令

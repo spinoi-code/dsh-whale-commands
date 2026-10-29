@@ -24,7 +24,7 @@
  *   因此这里实现的是「把历史对话的上下文载入当前会话」，而非切换会话本身。
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -867,6 +867,96 @@ function installAgentModelSelection(agent, selections) {
   return selection;
 }
 
+// ── /share：临时下载链接（tools/share-file.mjs，绕开微信 30MB 上限）──
+//
+// 工具独立于插件：优先用插件包自带的 tools/，没有就退回 $DSH_HOME/tools/。
+// 对外链接前缀由 SHARE_PUBLIC_BASE 决定；不配就只有本机能打开（见 docs/SHARE.md）。
+
+/** 找 share-file.mjs（自带优先，退回 DSH_HOME）。 */
+function shareToolPath() {
+  const local = join(import.meta.dirname, "tools", "share-file.mjs");
+  if (existsSync(local)) return local;
+  return join(DSH_HOME, "tools", "share-file.mjs");
+}
+
+/** 调 share-file.mjs CLI，返回 stdout（已 trim）。 */
+function shareCli(args, timeout = 25000) {
+  return execFileSync(process.execPath, [shareToolPath(), ...args], {
+    encoding: "utf8",
+    timeout,
+    cwd: DSH_HOME,
+    env: { ...process.env, TZ: "Asia/Shanghai" },
+  }).trim();
+}
+
+function fmtBytes(n) {
+  return n >= 1024 * 1024
+    ? `${(n / 1024 / 1024).toFixed(1)}MB`
+    : `${Math.max(1, Math.round(n / 1024))}KB`;
+}
+
+const SHARE_HELP = [
+  "临时下载链接：限时 + 令牌，HTTPS 直链，不受微信 30MB 限制",
+  "",
+  "/share <文件>            分享（默认 30 分钟 / 3 次）",
+  "/share <文件> 120 5      自定义：120 分钟 / 5 次",
+  "/share list              看进行中的分享",
+  "/share stop <id>         立刻停掉某条（链接马上失效）",
+  "/share stop all          全部停掉",
+  "/share status            服务状态",
+].join("\n");
+
+function handleShare({ rawInput }) {
+  const parts = String(rawInput ?? "").trim().split(/\s+/).filter(Boolean);
+  const sub = (parts[0] ?? "").toLowerCase();
+  try {
+    if (!sub || sub === "help" || sub === "?" || sub === "menu") {
+      return { kind: "success", text: SHARE_HELP };
+    }
+    if (sub === "list" || sub === "ls") {
+      return { kind: "success", text: shareCli(["list"]) };
+    }
+    if (sub === "status") {
+      const data = JSON.parse(shareCli(["status"]));
+      return {
+        kind: "success",
+        text: `共享服务：${data.daemon === "running" ? "在跑 ✓" : "没在跑"}（端口 ${data.port}），当前 ${data.shares} 条分享。`,
+      };
+    }
+    if (sub === "stop") {
+      const id = parts[1] ?? "";
+      if (!id) return { kind: "error", text: "用法：/share stop <id> 或 /share stop all" };
+      return { kind: "success", text: shareCli(["stop", id]) };
+    }
+
+    const rest = sub === "add" ? parts.slice(1) : parts;
+    const file = rest[0];
+    if (!file) return { kind: "error", text: SHARE_HELP };
+    const ttl = rest[1] === undefined ? 30 : Number(rest[1]);
+    const maxDl = rest[2] === undefined ? 3 : Number(rest[2]);
+    if (!Number.isFinite(ttl) || ttl <= 0) return { kind: "error", text: "分钟数要是正数" };
+    if (!Number.isInteger(maxDl) || maxDl <= 0) return { kind: "error", text: "下载次数要是正整数" };
+
+    const data = JSON.parse(
+      shareCli(["add", file, "--ttl", String(ttl), "--max-downloads", String(maxDl)]),
+    );
+    if (!data.ok) return { kind: "error", text: "建链接失败：检查一下文件路径。" };
+    return {
+      kind: "success",
+      text: [
+        `🔗 ${data.reused ? "这个文件已经有链接" : "临时链接做好了"}：${data.name}（${fmtBytes(data.bytes)}）`,
+        "",
+        data.url,
+        "",
+        `⏳ 剩余 ${data.remain}${data.reused ? "" : `，最多 ${data.maxDownloads} 次`}`,
+        `🆔 ${data.id}　/share stop ${data.id} 可立刻失效`,
+      ].join("\n"),
+    };
+  } catch (error) {
+    return { kind: "error", text: `分享失败：${String(error?.message ?? error).slice(0, 200)}` };
+  }
+}
+
 // ── /search 的 ctx 记录 ────────────────────────────────────────────────
 // cordis 重挂时可能 apply 两次，其中只有一次能拿到 web 服务；两个都记着。
 let searchActiveCtx = null;
@@ -1501,6 +1591,7 @@ export function apply(ctx, _config) {
   searchActiveCtx = ctx;
   if (webSeam(ctx)) searchWebCtx = ctx;
   register({ name: "search", description: SEARCH_HELP, handler: handleSearch });
+  register({ name: "share", description: SHARE_HELP, handler: handleShare });
 
   register({
     name: "whale",
