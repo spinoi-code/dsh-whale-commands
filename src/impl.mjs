@@ -867,6 +867,552 @@ function installAgentModelSelection(agent, selections) {
   return selection;
 }
 
+// ── /search 的 ctx 记录 ────────────────────────────────────────────────
+// cordis 重挂时可能 apply 两次，其中只有一次能拿到 web 服务；两个都记着。
+let searchActiveCtx = null;
+let searchWebCtx = null;
+
+const SEARCH_HELP = [
+  "🔎 深度调研搜索（宿主搜索 API + 会话模型）",
+  "",
+  "  /search <kw>        标准调研：多轮查询 + 抓正文 + 概述（默认）",
+  "  /search <kw> deep   超深度：模型规划多语言查询 + 2 层搜索 + 概述",
+  "  /search <kw> brief  只给找到的资料，不做概述",
+  "  /search <kw> en     英文关键词",
+  "",
+  "开关（可叠加，写在关键词之后）：",
+  "  deep   超深度调研：模型规划查询、从结果里提关键词再挖一层（最多 2 层）",
+  "  brief  关闭概述，只列找到的资料（别名 n）",
+  "  en     英文源（别名 e）",
+  "",
+  "例：/search A股 大跌",
+  "    /search A股 大跌 deep",
+  "    /search A股 大跌 brief",
+].join("\n");
+
+/** 惰性取宿主的 web 搜索接缝（ctx.web.search / ctx.web.fetch，即 web_search 工具的同一后端）。 */
+function webSeam(ctx) {
+  if (!ctx) return null;
+  try {
+    if (typeof ctx.get === "function") {
+      const w = ctx.get("web");
+      if (w && typeof w.search === "function") return w;
+    }
+  } catch {
+    /* 服务未就绪 */
+  }
+  return ctx.web && typeof ctx.web.search === "function" ? ctx.web : null;
+}
+
+/** 取宿主服务（重挂时不同 fiber 的 ctx 可能拿得到/拿不到，两个都试）。 */
+function getService(ctx, name) {
+  if (!ctx) return null;
+  try {
+    if (typeof ctx.get === "function") {
+      const svc = ctx.get(name);
+      if (svc) return svc;
+    }
+  } catch {
+    /* 未就绪 */
+  }
+  return ctx[name] ?? null;
+}
+
+/** 默认查询：原词 + 原因/背景 + 最新进展（单语言）。 */
+function defaultQueries(query, lang) {
+  const zh = lang === "zh" || (lang === "auto" && /[\u4e00-\u9fff]/.test(query));
+  const qs = [query];
+  if (zh) {
+    qs.push(`${query} 原因`);
+    qs.push(`${query} 最新进展`);
+  } else {
+    qs.push(`${query} reason`);
+    qs.push(`${query} latest`);
+  }
+  return [...new Set(qs)];
+}
+
+/** 并行搜索一组查询，合并 sources + 取第一个非空 answer。 */
+async function searchMany(web, queries, signal) {
+  const groups = await Promise.all(
+    queries.map((qq) => web.search({ query: qq, maxResults: 8 }, signal).catch(() => null)),
+  );
+  const sources = [];
+  let answer = "";
+  for (const g of groups) {
+    if (!answer && typeof g?.content === "string" && g.content.trim()) answer = g.content;
+    for (const s of g?.sources ?? []) if (s?.url) sources.push(s);
+  }
+  return { sources, answer };
+}
+
+function dedupeSources(list) {
+  const seen = new Set();
+  const out = [];
+  for (const s of list) {
+    if (!s?.url || seen.has(s.url)) continue;
+    seen.add(s.url);
+    out.push(s);
+  }
+  return out;
+}
+
+/** 从一段正文里挑 1-2 句有信息量的话（关键词/数字优先）。 */
+function clipPoints(text, query, max = 2) {
+  const flat = String(text).replace(/\s+/g, " ");
+  const sentences = flat
+    .split(/(?<=[。！？!?；;])|(?<=\.)\s+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 20 && x.length <= 280);
+  const kw = String(query).split(/\s+/).filter((x) => x.length >= 2);
+  const scored = sentences.map((x, i) => {
+    let sc = 0;
+    for (const k of kw) if (x.includes(k)) sc += 2;
+    if (/\d+(\.\d+)?(%|亿|万亿|倍|点|美元|元)/.test(x)) sc += 1.5;
+    if (i < 3) sc += 0.5;
+    return { s: x, sc, i };
+  });
+  scored.sort((a, b) => b.sc - a.sc || a.i - b.i);
+  const out = [];
+  const seen = new Set();
+  for (const x of scored) {
+    const k = x.s.replace(/[^\p{L}\p{N}]+/gu, "").slice(0, 24);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(x.s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** 微信是纯文本，剥掉 markdown 记号，避免显示成 **星号** / # 号。 */
+function plainText(text) {
+  return String(text)
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/`{1,3}([^`]*?)`{1,3}/g, "$1")
+    .replace(/^\s*[-*+]\s+/gm, "· ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** 当前北京时间（自然语言，喂给模型做时间锚）。 */
+function nowBeijing() {
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      weekday: "short",
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+/** 各种格式的发布日期 → YYYY-MM-DD（认不出就返回空串）。 */
+function toDay(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  const m = raw.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
+/** 按发布日期降序（新的在前，无日期沉底）。 */
+function sortByFreshness(list) {
+  return [...list].sort((a, b) => {
+    const ta = toDay(a.publishedAt);
+    const tb = toDay(b.publishedAt);
+    return (tb ? Date.parse(tb) : 0) - (ta ? Date.parse(ta) : 0);
+  });
+}
+
+/** 调会话模型（与 /compact 同一个 llm 服务、同一个当前模型）。 */
+async function llmCall(ctx, agent, prompt, maxTokens = 1500) {
+  const llm = getService(ctx, "llm");
+  if (!llm || typeof llm.stream !== "function") return null;
+  const provider = agent?.options?.provider;
+  const model = agent?.options?.model;
+  if (!provider || !model) return null;
+  const message = createUserMessage({
+    content: [{ type: "text", text: prompt }],
+    source: { kind: "whale-commands-search", plugin: "whale-commands" },
+  });
+  let out = "";
+  try {
+    for await (const chunk of llm.stream({
+      provider,
+      model,
+      messages: [message],
+      maxTokens,
+      reasoningEffort: "off",
+    })) {
+      if (chunk?.type === "text-delta" && typeof chunk.text === "string") out += chunk.text;
+    }
+  } catch (error) {
+    pluginNote(`llmCall: ${String(error?.message ?? error).slice(0, 120)}`);
+    return null;
+  }
+  return out.trim() || null;
+}
+
+/** 从模型输出里抠出第一个 JSON 字符串数组。 */
+function parseJsonArray(text) {
+  if (!text) return null;
+  const m = String(text).match(/\[[\s\S]*\]/);
+  if (!m) return null;
+  try {
+    const arr = JSON.parse(m[0]);
+    if (!Array.isArray(arr)) return null;
+    const out = arr.map((x) => String(x ?? "").trim()).filter(Boolean);
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 从模型输出里抠出第一个 JSON 对象。 */
+function parseJsonObject(text) {
+  if (!text) return null;
+  const m = String(text).match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const obj = JSON.parse(m[0]);
+    return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 时效窗口 → 天数（1d/3d/7d/30d） */
+const TF_DAYS = { "1d": 1, "3d": 3, "7d": 7, "30d": 30 };
+
+/** 时效阶梯：从小到大逐级放宽。 */
+const WINDOW_LADDER = ["1d", "3d", "7d", "30d"];
+/** 一档窗口内至少要几条才算"够用"。 */
+const MIN_WINDOW_SOURCES = 3;
+
+/**
+ * 从起始窗口开始，按 1d→3d→7d→30d 逐级放宽，找到第一档够数的。
+ * 纯本地筛选，不重新搜索。
+ * @returns {{tf: string, list: object[], relaxed: boolean, exact: number}}
+ */
+function relaxWindow(list, startTf) {
+  const idx = WINDOW_LADDER.indexOf(startTf);
+  const ladder = idx >= 0 ? WINDOW_LADDER.slice(idx) : WINDOW_LADDER;
+  const now = Date.now();
+  let exact = 0;
+  for (const tf of ladder) {
+    const days = TF_DAYS[tf];
+    const strict = list.filter((s) => {
+      const d = toDay(s.publishedAt);
+      return d && now - Date.parse(d) <= days * 86_400_000;
+    });
+    if (tf === startTf) exact = strict.length;
+    if (strict.length >= MIN_WINDOW_SOURCES) {
+      return { tf, list: strict, relaxed: tf !== startTf, exact };
+    }
+  }
+  // 阶梯走完仍不够：取最大窗口（含无日期条目，至少能列出东西）
+  const last = ladder[ladder.length - 1];
+  return { tf: last, list: filterByWindow(list, last), relaxed: last !== startTf, exact };
+}
+
+/** 只保留窗口内的来源；无日期的保留（可能是没给元数据的正文）。 */
+function filterByWindow(list, tf) {
+  const days = TF_DAYS[tf];
+  if (!days) return list;
+  const now = Date.now();
+  return list.filter((s) => {
+    const d = toDay(s.publishedAt);
+    if (!d) return true;
+    return now - Date.parse(d) <= days * 86_400_000;
+  });
+}
+
+/** 超深度模式：让模型先判断时效窗口，再规划多语言查询。 */
+async function planQueries(ctx, agent, query, lang) {
+  const zh = lang === "zh" || (lang === "auto" && /[\u4e00-\u9fff]/.test(query));
+  const prompt = [
+    `【当前时间】${nowBeijing()}（北京时间）`,
+    "",
+    `你要为一次联网搜索做规划。用户想调研：「${query}」`,
+    "",
+    "第一步：判断这个问题的时效性窗口，从这五个里选一个：",
+    '  "1d"  问今天/现在/最新行情、突发新闻',
+    '  "3d"  问最近几天/本周',
+    '  "7d"  问最近一周左右',
+    '  "30d" 一般调研、近一个月动态',
+    '  "any" 历史、原理、资料类，不限时间',
+    "判断依据：查询里出现「今天/现在/最新/当前/实时/行情/股价/刚刚」这类词，或问的是正在发生的事，就要选短窗口。",
+    "",
+    "第二步：生成 4~6 条查询词，覆盖：是什么、背景或原因、关键细节或数据、最新进展。",
+    "要求：",
+    zh
+      ? "1. 至少 2 条中文、至少 2 条英文；英文要地道，不要中式英语；"
+      : "1. 至少 2 条英文、至少 2 条中文；以英文为主；",
+    "2. 每条不超过 12 个词，像真的在搜索引擎里输入；",
+    "3. 只输出一个 JSON 对象，不要解释：",
+    '   {"timeframe":"7d","reason":"一句话说明为什么选这个窗口","queries":["查询1","查询2"]}',
+  ].join("\n");
+  const raw = await llmCall(ctx, agent, prompt, 800);
+  const obj = parseJsonObject(raw);
+  if (!obj) return null;
+  const qs = Array.isArray(obj.queries)
+    ? obj.queries.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 6)
+    : [];
+  if (!qs.length) return null;
+  const tf = TF_DAYS[String(obj.timeframe ?? "").toLowerCase()] ? String(obj.timeframe).toLowerCase() : "any";
+  return { queries: qs, timeframe: tf, reason: String(obj.reason ?? "").slice(0, 120) };
+}
+
+/** 超深度模式：从第一轮结果里找值得再挖的实体/关键词。 */
+async function extractKeywords(ctx, agent, sources, query) {
+  const titles = sources
+    .slice(0, 18)
+    .map((s, i) => `${i + 1}. ${s.title}`)
+    .join("\n");
+  const prompt = [
+    `下面是搜索「${query}」得到的标题：`,
+    titles,
+    "",
+    "请找出 2~3 个值得再搜一轮的相关实体（具体产品名 / 机构 / 技术 / 事件名），要求：",
+    "1. 必须出现在上面的标题里；2. 不是原查询词本身；3. 能用来搜到更多细节。",
+    "只输出一个 JSON 字符串数组，不要解释。",
+  ].join("\n");
+  const raw = await llmCall(ctx, agent, prompt, 400);
+  const arr = parseJsonArray(raw);
+  return arr ? arr.slice(0, 3) : null;
+}
+
+/** 用模型把资料写成事实档案（禁止元评论/交代缺失/罗列）。 */
+async function llmSummarize(ctx, agent, { query, answer, sources, timeframe, timeframeReason }) {
+  if (!sources.length) return "";
+  const material = sources
+    .map((s, i) => {
+      const pt = Array.isArray(s.points) && s.points.length ? ` 要点：${s.points.join("；")}` : "";
+      const day = toDay(s.publishedAt) || "日期未知";
+      return `${i + 1}.（${day}）${s.title}${s.snippet ? `｜${s.snippet}` : ""}${pt}`;
+    })
+    .join("\n")
+    .slice(0, 9000);
+
+  const prompt = [
+    `你是资深编辑。下面是从网上搜到的关于「${query}」的原始资料（可能含标题党、重复、广告、二手转述）。`,
+    "请把这些资料消化后，直接写一篇关于这个主题的事实档案（简体中文，400~700 字），读者是没看过任何资料的普通人。",
+    "",
+    "硬性要求：",
+    "1. 全文禁止出现这些词：「资料」「文章」「报道」「来源」「原文」「据…称」「现有资料」「显示」——只讲事实本身；",
+    "2. 开头直接讲它是什么、做什么（一句话），然后自然展开：能力、怎么运作、关键细节、时间与数字；",
+    "3. 把能提取的全部硬信息写进去：数字、日期、版本、价格、人名、机构、技术机制、产品能力、事件经过；",
+    "4. 搜到的材料里没有的信息（作者、许可证、发布时间等）直接不写，禁止写「未提供」「未见」「无从查证」「暂无」；",
+    "5. 不要用 1)2)3) 罗列；不要评价好坏、不要猜测意图、不要编造；",
+    "6. 禁止从名字推断内容（不写「从名称看」「顾名思义」）；名字本身不要再解释一遍；",
+    "7. 多份材料讲同一件事时，合并成一句事实陈述，数字取最具体的，不要并列引用不同说法。",
+    "",
+    "【格式】（输出是纯文本，会被发到微信）",
+    "- 禁止任何 markdown 记号：不要 **加粗**、# 标题、> 引用、`代码`、- 列表符号；小标题直接写文字；",
+    "- 总长 400~700 字；按内容分 2~4 个自然段，每段只讲一个方面，段与段之间空一行；",
+    "- 超过 500 字时，用 3~5 个字的小标题分节（例如「它是什么」「怎么做到」「关键数字」「最近动态」），小标题单独占一行；",
+    "- 每句尽量短（不超过 40 字），不要从句套从句，不要长句拼接；",
+    "- 用平实的中文，像给朋友讲清楚，不堆术语、不用「赋能」「抓手」这类词。",
+    "",
+    `【当前时间】${nowBeijing()}（北京时间）`,
+    timeframe && timeframe !== "any"
+      ? `【时效窗口】${timeframe}（判断依据：${timeframeReason || "查询需要最新信息"}）。现状只能用这个窗口内的信息；窗口外的只能当背景或对比，并且要写明「此前」。`
+      : "【时效窗口】不限（一般调研）。",
+    "【时间与时效规则】",
+    "- 每条资料都标了发布日期；时效性强的内容（行情、股价、价格、政策、项目进度、人事、数据）以最近 7 天的为准；",
+    "- 更早的信息只能写成「此前」「上一轮」「当时」，绝不当成当前状态；",
+    "- 不要把不同日期的数字、结论混成一句；如果最新资料推翻了旧结论，以最新为准并简述变化；",
+    "- 时间要自然融入叙述（用「最近」「目前」「本周」这类词），不要每句都写日期，也不要出现「根据资料时间」这类话。",
+    "",
+    answer ? `【搜索API概要】${String(answer).slice(0, 900)}` : "",
+    "【原始资料】",
+    material,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const text = await llmCall(ctx, agent, prompt, 8000);
+  if (text) {
+    const clean = plainText(text);
+    pluginNote(`summary: ok len=${clean.length} lines=${clean.split("\n").length} head=${clean.slice(0, 60).replace(/\n/g, "⏎")}`);
+    return clean.slice(0, 2000);
+  }
+  pluginNote("summary: 模型无输出，降级要点速览");
+  const fallback = sources
+    .map((x) => {
+      const first = Array.isArray(x.points) && x.points.length ? x.points[0] : x.snippet;
+      return first ? `· ${first}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 6)
+    .join("\n");
+  return fallback ? `（模型未返回摘要，以下为资料要点速览）\n${fallback}` : "";
+}
+
+/** 无概述时的资料列表（标题 + 日期/要点 + 链接）。 */
+function renderSources(lines, picked, withPoints) {
+  picked.forEach((s, i) => {
+    lines.push(`${i + 1}. ${s.title || s.url}`);
+    const bits = [];
+    const day = toDay(s.publishedAt);
+    if (day) bits.push(day);
+    if (withPoints) {
+      const pt = Array.isArray(s.points) && s.points.length ? s.points[0] : s.snippet;
+      if (pt) bits.push(String(pt).replace(/\s+/g, " ").slice(0, 90));
+    }
+    if (bits.length) lines.push(`   ${bits.join(" · ")}`);
+    lines.push(`   🔗 ${s.url}`);
+    lines.push("");
+  });
+}
+
+/** 主流程：web 服务可用时的完整调研。 */
+async function searchWithWeb(web, { query, deep, brief, lang, agent }) {
+  const ctx = searchActiveCtx ?? searchWebCtx;
+  const t0 = Date.now();
+  const ac = new AbortController();
+  const killer = setTimeout(() => ac.abort(new Error("search timeout")), 240_000);
+  try {
+    // 1) 规划：deep 让模型判断时效窗口 + 多语言查询；普通模式用默认三轮
+    let queries;
+    let planned = 0;
+    let timeframe = "any";
+    let timeframeReason = "";
+    if (deep) {
+      const p = await planQueries(ctx, agent, query, lang);
+      if (p) {
+        queries = p.queries;
+        planned = p.queries.length;
+        timeframe = p.timeframe;
+        timeframeReason = p.reason;
+      } else {
+        queries = defaultQueries(query, lang);
+      }
+    } else {
+      queries = defaultQueries(query, lang);
+    }
+
+    // 2) 第一轮
+    const l1 = await searchMany(web, queries, ac.signal);
+
+    // 3) 超深度：第二轮（从结果里提关键词再挖一层，最多 2 层）
+    let extraCount = 0;
+    let l2sources = [];
+    if (deep && l1.sources.length >= 4) {
+      const kws = await extractKeywords(ctx, agent, l1.sources, query);
+      if (kws && kws.length) {
+        extraCount = kws.length;
+        const l2 = await searchMany(web, kws.map((k) => `${query} ${k}`), ac.signal);
+        l2sources = l2.sources;
+      }
+    }
+
+    // 4) 合并去重 + 严格时效过滤 + 按发布日期排序（新的在前）
+    let all = sortByFreshness(dedupeSources([...l1.sources, ...l2sources]));
+    let windowNote = "";
+    if (deep && timeframe !== "any") {
+      const r = relaxWindow(all, timeframe);
+      all = r.list;
+      if (r.relaxed) {
+        windowNote = `时效 ${timeframe} 内仅 ${r.exact} 条 → 放宽到 ${r.tf}`;
+      } else if (r.exact === 0) {
+        windowNote = `时效 ${timeframe} · 0 条带日期，按原样列出`;
+      } else {
+        windowNote = `时效 ${timeframe} · ${all.length} 条`;
+      }
+    }
+    const answer = l1.answer || "";
+    const picked = all.slice(0, deep ? 8 : 6);
+
+    // 5) 抓正文补细节（deep 4 篇 / 普通 3 篇）
+    await Promise.all(
+      picked.slice(0, deep ? 4 : 3).map(async (s) => {
+        try {
+          const r = await web.fetch({ url: s.url }, ac.signal);
+          const body = r?.body?.content ?? "";
+          if (body) s.points = clipPoints(body, query, 2);
+        } catch {
+          /* 单篇失败不影响整体 */
+        }
+      }),
+    );
+
+    pluginNote(`search: ${all.length} 条来源，${all.filter((x) => toDay(x.publishedAt)).length} 条带日期`);
+
+    // 6) 概述
+    let summary = "";
+    if (!brief) {
+      summary = await llmSummarize(ctx, agent, {
+        query,
+        answer,
+        sources: picked,
+        timeframe,
+        timeframeReason,
+      });
+    }
+
+    // 7) 输出：概述 → 分界线 → 参考来源
+    const meta = [`${queries.length} 轮查询`];
+    if (windowNote) meta.push(windowNote);
+    if (deep) meta.push(`规划 ${planned || queries.length} 条`);
+    if (extraCount) meta.push(`深挖 ${extraCount} 个关键词`);
+    meta.push(`${all.length} 条来源`);
+    meta.push(`${((Date.now() - t0) / 1000).toFixed(1)}s`);
+
+    const lines = [`🔎 ${deep ? "超深度调研" : "标准调研"}：${query}`, `（${meta.join(" · ")}）`, ""];
+
+    if (summary) {
+      lines.push("📌 概述", summary, "", "──────────────");
+      lines.push(`📎 参考来源（共 ${all.length} 条，列出 ${picked.length} 条）`, "");
+      renderSources(lines, picked, false);
+    } else {
+      lines.push(`📎 找到的资料（共 ${all.length} 条，列出 ${picked.length} 条）`, "");
+      renderSources(lines, picked, true);
+    }
+    if (!picked.length) lines.push("没搜到结果，换个关键词试试。");
+    return { kind: "success", text: lines.join("\n").trim() };
+  } finally {
+    clearTimeout(killer);
+  }
+}
+
+async function handleSearch({ rawInput, agent }) {
+  const text = String(rawInput ?? "").trim();
+  if (!text || /^(help|\?|menu)$/i.test(text)) return { kind: "success", text: SEARCH_HELP };
+
+  // 开关参数（纯英文，位置随意）：deep / brief / en
+  let deep = false;
+  let brief = false;
+  let lang = "auto";
+  const words = [];
+  for (const raw of text.split(/\s+/)) {
+    const t = raw.toLowerCase();
+    if (["deep", "d", "-d"].includes(t)) deep = true;
+    else if (["brief", "nosum", "n", "-n", "no-summary"].includes(t)) brief = true;
+    else if (["en", "e", "-e", "english"].includes(t)) lang = "en";
+    else if (t.length) words.push(raw);
+  }
+  const q = words.join(" ");
+  if (!q.trim()) return { kind: "error", text: SEARCH_HELP };
+
+  // ① 首选：宿主 web 搜索 API（web_search 工具的同一后端）
+  let web = webSeam(searchActiveCtx);
+  if (!web) web = webSeam(searchWebCtx);
+  if (web) return searchWithWeb(web, { query: q, deep, brief, lang, agent });
+
+  // ② 宿主 web 服务没就绪：明确报错，不做私有工具兜底
+  return { kind: "error", text: "🔌 搜索服务还没就绪（宿主 web 服务不可用），稍后再试一次。" };
+
+}
+
 export function apply(ctx, _config) {
   /** 会话提示节流表：id → 上次推送时间。 */
   const lastNoticeAt = new Map();
@@ -950,6 +1496,11 @@ export function apply(ctx, _config) {
     setPersona(null);
     return current;
   }
+
+  // /search：深度调研搜索（搜索走宿主 ctx.web，概述走会话模型）
+  searchActiveCtx = ctx;
+  if (webSeam(ctx)) searchWebCtx = ctx;
+  register({ name: "search", description: SEARCH_HELP, handler: handleSearch });
 
   register({
     name: "whale",

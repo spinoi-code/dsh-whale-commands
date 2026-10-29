@@ -1,6 +1,6 @@
 {
   "name": "dsh-whale-commands",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "description": "Slash commands for the DeepSeek Harness Weixin channel: persona toggle & multi-persona library, session history (soft load or real session switch), model selection, token usage and balance, scheduled daily greetings. Host-side execution, zero model tokens, hot-reload. Also ships compatibility notes and patches that let 0.1-era channel plugins run on harness 0.2.",
   "type": "module",
   "license": "AGPL-3.0",
@@ -27,7 +27,11 @@
     "multi-persona",
     "harness-0.2",
     "compat",
-    "migration"
+    "migration",
+    "search",
+    "web-search",
+    "deep-research",
+    "ai-summary"
   ],
   "engines": {
     "node": ">=22"
