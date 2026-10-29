@@ -110,6 +110,8 @@ cd dsh-whale-commands && ./install.sh
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | 安装细节：harness 版本选择、自定义路径、升级与更新 |
 | [docs/COMMANDS.md](docs/COMMANDS.md) | 每条命令的用法、输出与限制 |
+| [docs/WORKFLOWS.md](docs/WORKFLOWS.md) | **命令组合用法**：把几条命令串成工作流（调研→成文→分享、时效敏感查询、找回上下文、排障顺序） |
+| [docs/SEARCH.md](docs/SEARCH.md) | **`/search` 深度调研**：数据通路、超深度链路、时效窗口、概述硬约束、排障 |
 | [docs/PERSONAS.md](docs/PERSONAS.md) | 人设库与 `/whale` 纪念入口 |
 | [docs/GREETINGS.md](docs/GREETINGS.md) | 定时问候：文案来源、`/style`、本地预览 |
 | [docs/SHARE.md](docs/SHARE.md) | `/share` 安装、Caddy/Nginx 配置、安全模型、排障 |
